@@ -39,6 +39,10 @@ GNU General Public License for more details.
 #include "library.h"
 #include "platform/platform.h"
 
+#ifdef MISTER_HYBRID
+#include "platform/mister/mister_port.h"
+#endif
+
 host_parm_t host;	// host parms
 static jmp_buf return_from_main_buf;
 
@@ -543,6 +547,12 @@ static qboolean Host_Autosleep( double dt, double scale )
 {
 	double targetframetime;
 	double fps = Host_CalcFPS();
+
+#ifdef MISTER_HYBRID
+	// the main loop waited for the core's next field
+	if( MiSTer_Paced( ))
+		return true;
+#endif
 
 	if( fps <= 0 )
 		return true;
@@ -1182,7 +1192,13 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 #endif
 
 	if( setjmp( return_from_main_buf ))
+	{
+#ifdef MISTER_HYBRID
+		if( !error_on_exit )
+			return MiSTer_ExitCode();
+#endif
 		return error_on_exit;
+	}
 
 	host.starttime = Platform_DoubleTime();
 
@@ -1340,6 +1356,18 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 	while( host.status != HOST_CRASHED )
 	{
 		double newtime = Platform_DoubleTime();
+#ifdef MISTER_HYBRID
+		// one frame per field of the core, and the game's time is the
+		// number of fields that have passed
+		unsigned fields = MiSTer_WaitFrame();
+
+		if( fields )
+		{
+			COM_Frame( fields * MISTER_FIELD_TIME );
+			oldtime = Platform_DoubleTime();
+			continue;
+		}
+#endif
 		COM_Frame( newtime - oldtime );
 		oldtime = newtime;
 	}

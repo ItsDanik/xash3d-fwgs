@@ -593,7 +593,12 @@ static rserr_t VID_SetScreenResolution( int width, int height, window_mode_t win
 			SDL_DisplayMode dm;
 			qboolean center_window = false;
 
+#ifdef MISTER_HYBRID
+			// the size of the window picks the core's video mode, the "desktop" is its 320x200
+			if( false )
+#else
 			if( SDL_GetDesktopDisplayMode( display_index, &dm ) >= 0 && width >= dm.w && height >= dm.h )
+#endif
 			{
 				SDL_SetWindowSize( host.hWnd, dm.w, dm.h );
 				// Con_Printf( "%s: activating fake fullscreen mode\n", __func__ );

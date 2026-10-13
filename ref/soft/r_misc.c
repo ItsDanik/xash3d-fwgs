@@ -220,7 +220,8 @@ static void R_ViewChanged( vrect_t *vr )
 	aliasxscale = xscale * r_aliasuvscale;
 	xscaleinv = 1.0f / xscale;
 
-	yscale = xscale;
+	// not xscale: the pixels are not square in every video mode (MiSTer, 320x200 on a 4:3 screen)
+	yscale = RI.vrect.height / verticalFieldOfView;
 	aliasyscale = yscale * r_aliasuvscale;
 	yscaleinv = 1.0f / yscale;
 	// xscaleshrink = (RI.vrect.width-6)/RI.horizontalFieldOfView;

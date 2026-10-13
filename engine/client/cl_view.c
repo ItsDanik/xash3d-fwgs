@@ -307,7 +307,12 @@ static void V_GetRefParams( ref_params_t *fd, ref_viewpass_t *rvp )
 	rvp->fov_x = bound( 10.0f, cl.local.scr_fov, 150.0f ); // this is a final fov value
 
 	// first we need to compute FOV and other things that needs for frustum properly work
+#ifdef MISTER_HYBRID
+	// every video mode of the core fills a 4:3 screen: the pixels of 320x200 are not square
+	rvp->fov_y = V_CalcFov( &rvp->fov_x, (float)clgame.viewport[2] * refState.height * 4.0f, (float)clgame.viewport[3] * refState.width * 3.0f );
+#else
 	rvp->fov_y = V_CalcFov( &rvp->fov_x, clgame.viewport[2], clgame.viewport[3] );
+#endif
 
 	// adjust FOV for widescreen
 	if( refState.wideScreen && r_adjust_fov.value )

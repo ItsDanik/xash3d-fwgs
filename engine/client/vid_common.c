@@ -80,6 +80,9 @@ void R_SaveVideoMode( int w, int h, int render_w, int render_h, qboolean maximiz
 
 	// check for 4:3 or 5:4
 	refState.wideScreen = render_w * 3 != render_h * 4 && render_w * 4 != render_h * 5;
+#ifdef MISTER_HYBRID
+	refState.wideScreen = false; // every video mode of the core fills a 4:3 screen
+#endif
 
 	SCR_VidInit(); // tell client.dll that vid_mode has changed
 }
@@ -101,6 +104,29 @@ const char *VID_GetModeString( int vid_mode )
 	return vidmode->desc;
 }
 
+#ifdef MISTER_HYBRID
+/*
+==================
+VID_MiSTerMode
+
+The menu and the console are made for 640x480 (interlaced on a 15kHz screen),
+the game is played in the core's 320x200
+==================
+*/
+static void VID_MiSTerMode( void )
+{
+	qboolean menu = UI_IsVisible() || cls.key_dest == key_console;
+	int width = menu ? 640 : 320;
+	int height = menu ? 480 : 200;
+
+	if( !host.hWnd || ( refState.width == width && refState.height == height ))
+		return;
+
+	if( R_ChangeDisplaySettings( width, height, WINDOW_MODE_WINDOWED ) != rserr_ok )
+		Con_Printf( S_ERROR "%s: no video mode %dx%d\n", __func__, width, height );
+}
+#endif
+
 /*
 ==================
 VID_CheckChanges
@@ -116,6 +142,10 @@ void VID_CheckChanges( void )
 		SCR_RegisterTextures(); // reload 'lambda' image
 		ClearBits( cl_allow_levelshots.flags, FCVAR_CHANGED );
 	}
+
+#ifdef MISTER_HYBRID
+	VID_MiSTerMode();
+#endif
 
 	if( host.renderinfo_changed )
 	{

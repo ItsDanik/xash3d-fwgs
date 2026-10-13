@@ -292,7 +292,11 @@ static void SDLash_EventHandler( SDL_Event *event )
 		break;
 
 	case SDL_QUIT:
+#ifdef MISTER_HYBRID
+		Sys_Quit( "caught SDL_QUIT" );
+#else
 		CL_RequestQuit( "caught SDL_QUIT" );
+#endif
 		break;
 	case SDL_MOUSEWHEEL:
 		IN_MWheelEvent( event->wheel.y );

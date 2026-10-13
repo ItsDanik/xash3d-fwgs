@@ -21,6 +21,10 @@ GNU General Public License for more details.
 #include <SDL.h>
 #endif
 
+#ifdef MISTER_HYBRID
+#include "platform/mister/mister_port.h"
+#endif
+
 #ifndef XASH_GAMEDIR
 #define XASH_GAMEDIR "valve" // !!! Replace with your default (base) game directory !!!
 #endif
@@ -45,6 +49,10 @@ int main( int argc, char **argv )
 	szArgc = argc;
 	szArgv = argv;
 #endif // XASH_PSVITA
+#ifdef MISTER_HYBRID
+	if( !MiSTer_SelectGame( ))
+		return 0;
+#endif
 	return Host_Main( szArgc, szArgv, XASH_GAMEDIR, 0, Sys_ChangeGame );
 }
 #endif // XASH_ENABLE_MAIN

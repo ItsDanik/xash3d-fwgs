@@ -40,7 +40,8 @@ class objcopy_relocatable_lib(Task.Task):
 class xshlib(ccroot.link_task):
 	"make relocatable library"
 	no_errcheck_out = True
-	run_str = '${LD} -r -o ${TGT[0].abspath()} ${LD_RELOCATABLE_FLAGS} ${CCLNK_SRC_F}${SRC}'
+	# static libraries of the tree the library uses (ref/common, public) go in as well
+	run_str = '${LD} -r -o ${TGT[0].abspath()} ${LD_RELOCATABLE_FLAGS} ${CCLNK_SRC_F}${SRC} ${STLIBPATH_ST:STLIBPATH} ${STLIB_ST:STLIB}'
 
 	def add_target(self, target):
 		"create objcopy task for target"
@@ -64,6 +65,8 @@ class cprogram_static(c.cprogram):
 class cxxprogram_static(cxx.cxxprogram):
 	"build static cxx program"
 	run_str = '${LINK_CXX} -static ${LINKFLAGS} ${CXXLNK_SRC_F}${SRC} ${CXXLNK_TGT_F}${TGT[0].abspath()} ${RPATH_ST:RPATH} ${FRAMEWORKPATH_ST:FRAMEWORKPATH} ${FRAMEWORK_ST:FRAMEWORK} ${ARCH_ST:ARCH} ${STLIB_MARKER} ${STLIBPATH_ST:STLIBPATH} ${STLIB_ST:STLIB} ${STLIB_MARKER} ${LIBPATH_ST:LIBPATH} ${LIB_ST:LIB} ${LDFLAGS}'
+
+ccroot.USELIB_VARS['xshlib'] = set(['STLIB', 'STLIBPATH'])
 
 # usevars are same
 ccroot.USELIB_VARS['cprogram_static'] = ccroot.USELIB_VARS['cxxprogram_static'] = ccroot.USELIB_VARS['cxxprogram']

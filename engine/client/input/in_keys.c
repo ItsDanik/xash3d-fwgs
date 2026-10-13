@@ -115,6 +115,29 @@ static const keyname_t keynames[] =
 
 // Gamepad
 // A/B X/Y names match the Xbox controller layout
+#ifdef MISTER_HYBRID
+// MiSTer: the eight buttons of the core's "J1" list (core/Xash3D.sv) in its
+// order, the d-pad for a pad without sticks, the triggers
+{ "A_BUTTON",       K_A_BUTTON,            "+jump"           },
+{ "B_BUTTON",       K_B_BUTTON,            "+duck"           },
+{ "X_BUTTON",       K_X_BUTTON,            "+use"            },
+{ "Y_BUTTON",       K_Y_BUTTON,            "+reload"         },
+{ "BACK",           K_BACK_BUTTON,         "invnext"         },
+{ "MODE",           K_MODE_BUTTON,         ""                },
+{ "START",          K_START_BUTTON,        "cancelselect"    },
+{ "STICK1",         K_LSTICK,              ""                },
+{ "STICK2",         K_RSTICK,              ""                },
+{ "L1_BUTTON",      K_L1_BUTTON,           "+attack2"        },
+{ "R1_BUTTON",      K_R1_BUTTON,           "+attack"         },
+{ "DPAD_UP",        K_DPAD_UP,             "+forward"        },
+{ "DPAD_DOWN",      K_DPAD_DOWN,           "+back"           },
+{ "DPAD_LEFT",      K_DPAD_LEFT,           "+left"           },
+{ "DPAD_RIGHT",     K_DPAD_RIGHT,          "+right"          },
+{ "L2_BUTTON",      K_L2_BUTTON,           ""                },
+{ "R2_BUTTON",      K_R2_BUTTON,           ""                },
+{ "LTRIGGER",       K_JOY1,                "+attack2"        }, // L2 in SDL2
+{ "RTRIGGER",       K_JOY2,                "+attack"         }, // R2 in SDL2
+#else
 { "A_BUTTON",       K_A_BUTTON,            "+jump"           },
 { "B_BUTTON",       K_B_BUTTON,            "+use"            },
 { "X_BUTTON",       K_X_BUTTON,            "+reload"         },
@@ -134,6 +157,7 @@ static const keyname_t keynames[] =
 { "R2_BUTTON",      K_R2_BUTTON,           "+attack2"        },
 { "LTRIGGER",       K_JOY1,                "+speed"          }, // L2 in SDL2
 { "RTRIGGER",       K_JOY2,                "+attack2"        }, // R2 in SDL2
+#endif
 { "JOY3",           K_JOY3,                ""                },
 { "JOY4",           K_JOY4,                ""                },
 { "C_BUTTON",       K_C_BUTTON,            ""                },
@@ -383,6 +407,18 @@ static void Key_Unbindall_f( void )
 	// set some defaults
 	Key_SetBinding( K_ESCAPE, "cancelselect" );
 	Key_SetBinding( K_START_BUTTON, "cancelselect" );
+
+#ifdef MISTER_HYBRID
+	// a config.cfg that came with the game data knows no gamepad and starts
+	// with "unbindall": the pad keeps its layout until the config says otherwise
+	for( int i = 0; i < ARRAYSIZE( keynames ); i++ )
+	{
+		int k = keynames[i].keynum;
+
+		if(( k >= K_AUX1 && k <= K_AUX32 ) || k == K_JOY1 || k == K_JOY2 )
+			Key_SetBinding( k, keynames[i].binding );
+	}
+#endif
 }
 
 /*

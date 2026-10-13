@@ -384,8 +384,10 @@ void GAME_EXPORT Con_Printf( const char *szFmt, ... )
 {
 	va_list args;
 
+#ifndef MISTER_HYBRID // the launcher keeps what the engine prints as the log of the core
 	if( !host.allow_console )
 		return;
+#endif
 
 	va_start( args, szFmt );
 	Con_Printfv( false, szFmt, args );

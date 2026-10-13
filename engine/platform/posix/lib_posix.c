@@ -280,9 +280,24 @@ qboolean Platform_CheckLibraryDirectDependency( const byte *data, size_t size, c
 }
 #endif // !XASH_APPLE && !XASH_ANDROID && !XASH_PSVITA && !XASH_NSWITCH
 
+#if defined( MISTER_HYBRID ) && defined( XASH_STATIC_LIBS )
+// platform/misc/lib_static.c
+void *MiSTer_StaticLibrary( const char *dllname );
+qboolean MiSTer_IsStaticLibrary( void *hInstance );
+void *MiSTer_StaticProcAddress( void *hInstance, const char *name );
+#else
+#define MiSTer_StaticLibrary( dllname ) NULL
+#define MiSTer_IsStaticLibrary( hInstance ) false
+#define MiSTer_StaticProcAddress( hInstance, name ) NULL
+#endif
+
 void *COM_LoadLibrary( const char *dllname, int build_ordinals_table, qboolean directpath )
 {
 	COM_ResetLibraryError();
+
+	void *pStatic = MiSTer_StaticLibrary( dllname );
+	if( pStatic )
+		return pStatic;
 
 	// platforms where gameinfo mechanism is impossible
 #ifdef Platform_POSIX_LoadLibrary
@@ -331,6 +346,8 @@ void *COM_LoadLibrary( const char *dllname, int build_ordinals_table, qboolean d
 
 void COM_FreeLibrary( void *hInstance )
 {
+	if( MiSTer_IsStaticLibrary( hInstance ))
+		return;
 #ifdef Platform_POSIX_FreeLibrary
 	Platform_POSIX_FreeLibrary( hInstance );
 #else
@@ -340,6 +357,8 @@ void COM_FreeLibrary( void *hInstance )
 
 void *COM_GetProcAddress( void *hInstance, const char *name )
 {
+	if( MiSTer_IsStaticLibrary( hInstance ))
+		return MiSTer_StaticProcAddress( hInstance, name );
 #if Platform_POSIX_GetProcAddress
 	return Platform_POSIX_GetProcAddress( hInstance, name );
 #else
@@ -349,6 +368,8 @@ void *COM_GetProcAddress( void *hInstance, const char *name )
 
 void *COM_GetProcAddressFromDependency( void *hInstance, const char *depname, const char *name )
 {
+	if( MiSTer_IsStaticLibrary( hInstance ))
+		return NULL;
 	// dlsym walks the dependency tree of the handle, no need to look the dependency up by name
 	return dlsym( hInstance, name );
 }

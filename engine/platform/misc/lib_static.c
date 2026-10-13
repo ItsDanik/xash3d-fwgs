@@ -73,3 +73,55 @@ const char *COM_NameForFunction( void *hInstance, void *function )
 #endif
 }
 #endif // XASH_LIB == LIB_STATIC
+
+#if defined( MISTER_HYBRID ) && defined( XASH_STATIC_LIBS )
+// MiSTer: the libraries of the engine (filesystem, renderer, menu) are linked
+// into the binary, the libraries of the game are loaded by lib_posix.c
+typedef struct table_s
+{
+	const char *name;
+	void *pointer;
+} table_t;
+
+#include "generated_library_tables.h"
+
+// "path/libref_soft.so" names the built-in "ref_soft"
+void *MiSTer_StaticLibrary( const char *dllname )
+{
+	const char *base = COM_FileWithoutPath( dllname );
+	size_t len;
+
+	if( !Q_strncmp( base, "lib", 3 ))
+		base += 3;
+	len = Q_strlen( base );
+	if( len > 3 && !Q_strcmp( base + len - 3, ".so" ))
+		len -= 3;
+
+	for( int i = 0; libs[i].name; i++ )
+	{
+		if( Q_strlen( libs[i].name ) == len && !Q_strncmp( libs[i].name, base, len ))
+			return libs[i].func;
+	}
+	return NULL;
+}
+
+qboolean MiSTer_IsStaticLibrary( void *hInstance )
+{
+	for( int i = 0; libs[i].name; i++ )
+	{
+		if( libs[i].func == hInstance )
+			return true;
+	}
+	return false;
+}
+
+void *MiSTer_StaticProcAddress( void *hInstance, const char *name )
+{
+	for( table_t *tbl = hInstance; tbl->name; tbl++ )
+	{
+		if( !Q_strcmp( tbl->name, name ))
+			return tbl->pointer;
+	}
+	return NULL;
+}
+#endif // MISTER_HYBRID && XASH_STATIC_LIBS

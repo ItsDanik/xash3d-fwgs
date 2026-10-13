@@ -99,7 +99,7 @@ SETUP BACKENDS DEFINITIONS
 
 #if XASH_PSP
 	#define XASH_PSP LIB_PSP
-#elif defined( XASH_STATIC_LIBS )
+#elif defined( XASH_STATIC_LIBS ) && !defined( MISTER_HYBRID )
 	#define XASH_LIB LIB_STATIC
 	#define XASH_INTERNAL_GAMELIBS
 	#define XASH_ALLOW_SAVERESTORE_OFFSETS
@@ -133,7 +133,12 @@ Default build-depended cvar and constant values
 */
 
 // Platform overrides
-#if XASH_WIN32
+#if defined( MISTER_HYBRID )
+	// the size of the window is the core's video mode
+	#define DEFAULT_FULLSCREEN   "0"
+	#define DEFAULT_MODE_WIDTH   640
+	#define DEFAULT_MODE_HEIGHT  480
+#elif XASH_WIN32
 	// set up windowed by default on Windows to avoid problems with
 	// Xbox Game Bar
 	#define DEFAULT_FULLSCREEN   "0"

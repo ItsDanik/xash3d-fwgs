@@ -303,6 +303,86 @@ static void SDLash_GameControllerTouchpadEvent( const SDL_ControllerTouchpadEven
 }
 #endif // SDL_VERSION_ATLEAST( 2, 0, 14 )
 
+#ifdef MISTER_HYBRID
+/*
+=============
+MiSTer_AddMappings
+
+The joysticks of the hybrid core (hybrid/sdl2): buttons 0..7 are the actions of
+the core's "J1" list, 8 and 9 its spare Menu OK and Menu Back, 28 and 29 the
+buttons the OSD's Menu OK / Menu Back options name. The d-pad is hat 0, the
+triggers rest at 0.
+=============
+*/
+static void MiSTer_AddMappings( void )
+{
+	int numJoysticks = SDL_NumJoysticks();
+
+	for( int i = 0; i < numJoysticks; i++ )
+	{
+		const char *name = SDL_JoystickNameForIndex( i );
+		char guid[64], mapping[512];
+
+		if( !name || Q_strncmp( name, "MiSTer Joystick", 15 ))
+			continue;
+
+		SDL_JoystickGetGUIDString( SDL_JoystickGetDeviceGUID( i ), guid, sizeof( guid ));
+		Q_snprintf( mapping, sizeof( mapping ), "%s,%s,"
+			"a:b0,b:b1,x:b2,y:b3,leftshoulder:b4,rightshoulder:b5,back:b6,start:b7,"
+			"paddle1:b8,paddle2:b9,paddle3:b28,paddle4:b29,"
+			"dpup:h0.1,dpright:h0.2,dpdown:h0.4,dpleft:h0.8,"
+			"leftx:a0,lefty:a1,rightx:a2,righty:a3,lefttrigger:+a4,righttrigger:+a5,", guid, name );
+		if( SDL_GameControllerAddMapping( mapping ) < 0 )
+		{
+			Con_Printf( S_ERROR "%s: %s\n", __func__, SDL_GetError( ));
+			continue;
+		}
+
+		// the joystick was there before it had a mapping: SDL announces no game controller
+		SDLash_GameControllerAdded( i );
+	}
+}
+
+/*
+=============
+MiSTer_ButtonEvent
+
+In the menu and the console the buttons that confirm and go back are the ones
+the player chose in the core's OSD (by default those of the MiSTer menu),
+whatever they do in the game. Returns false for a button that is not for the
+engine now.
+=============
+*/
+static qboolean MiSTer_ButtonEvent( int button, int down, int *key )
+{
+	qboolean game = cls.key_dest == key_game;
+
+	switch( button )
+	{
+	case SDL_CONTROLLER_BUTTON_PADDLE1: // Menu OK
+	case SDL_CONTROLLER_BUTTON_PADDLE3:
+		*key = K_ENTER;
+		return !game || !down;
+	case SDL_CONTROLLER_BUTTON_PADDLE2: // Menu Back
+	case SDL_CONTROLLER_BUTTON_PADDLE4:
+		*key = K_ESCAPE;
+		return !game || !down;
+	case SDL_CONTROLLER_BUTTON_START:
+		if( !game && down )
+			*key = K_ESCAPE; // the button that opened the menu closes it
+		return true;
+	case SDL_CONTROLLER_BUTTON_DPAD_UP:
+	case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+	case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+	case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+		return true;
+	default:
+		// the buttons of the game's actions: released wherever they were pressed
+		return game || !down;
+	}
+}
+#endif // MISTER_HYBRID
+
 void SDLash_HandleGameControllerEvent( SDL_Event *ev )
 {
 	int x;
@@ -320,7 +400,14 @@ void SDLash_HandleGameControllerEvent( SDL_Event *ev )
 		SDLash_SetActiveGameController( ev->cbutton.which );
 		x = ev->cbutton.button;
 		if( x >= 0 && x < ARRAYSIZE( g_button_mapping ))
-			Key_Event( g_button_mapping[x], ev->cbutton.state );
+		{
+			int key = g_button_mapping[x];
+#ifdef MISTER_HYBRID
+			if( !MiSTer_ButtonEvent( x, ev->cbutton.state, &key ))
+				break;
+#endif
+			Key_Event( key, ev->cbutton.state );
+		}
 		break;
 	case SDL_CONTROLLERDEVICEREMOVED:
 		SDLash_GameControllerRemoved( ev->cdevice.which );
@@ -399,6 +486,9 @@ int Platform_JoyInit( void )
 
 	SDLash_GameControllerAddMappings( "gamecontrollerdb.txt" ); // shipped in extras.pk3
 	SDLash_GameControllerAddMappings( "controllermappings.txt" );
+#ifdef MISTER_HYBRID
+	MiSTer_AddMappings();
+#endif
 
 	int count = 0;
 	int numJoysticks = SDL_NumJoysticks();
