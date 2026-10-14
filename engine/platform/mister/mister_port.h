@@ -53,6 +53,28 @@ int MiSTer_PickGame(const char *const *names, int count, int selected);
 // Problems the player can fix (missing data): shown on the screen until a
 // button is pressed, in plain words that say which files go where
 void MiSTer_ShowError(const char *message);
+// Development, MISTER_HYBRID_FPSLOG=1: where the time of a frame goes. The
+// engine says what it starts doing; the log has the milliseconds per frame of
+// each. MISTER_HYBRID_PROFILE=<file> samples the program counter of the game
+// thread as well, 1000 times per second of its CPU time, and writes the
+// samples there on leaving (tools/profile.py reads them).
+enum {
+    MISTER_T_OTHER,
+    MISTER_T_WAIT, // for the core's next field
+    MISTER_T_INPUT,
+    MISTER_T_SERVER,
+    MISTER_T_CLIENT,
+    MISTER_T_RENDER, // the 3D view
+    MISTER_T_HUD, // what is drawn over it
+    MISTER_T_BLIT, // to the window and the core
+    MISTER_T_SOUND,
+    MISTER_T_COUNT
+};
+void MiSTer_Mark(int what);
+
+// Rows of the game's video mode, which is 320 wide: 200 or 240 (OSD option Resolution)
+int MiSTer_GameHeight(void);
+
 // Before the engine starts: finds the games that are installed next to the
 // binary (a folder with the game's liblist.gam and our libraries for it) and,
 // if there are several, lets the player pick one. Sets XASH3D_GAME. Returns 0

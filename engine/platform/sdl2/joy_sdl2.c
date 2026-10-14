@@ -345,6 +345,31 @@ static void MiSTer_AddMappings( void )
 
 /*
 =============
+MiSTer_StickHoldsDpad
+
+Whether the left stick points the way of a d-pad button that is pressed
+=============
+*/
+static qboolean MiSTer_StickHoldsDpad( SDL_JoystickID which, int button )
+{
+	SDL_GameController *gc = SDL_GameControllerFromInstanceID( which );
+	const int far = 8192; // a quarter of the way: MiSTer's own threshold is further out
+
+	if( !gc )
+		return false;
+
+	switch( button )
+	{
+	case SDL_CONTROLLER_BUTTON_DPAD_UP: return SDL_GameControllerGetAxis( gc, SDL_CONTROLLER_AXIS_LEFTY ) < -far;
+	case SDL_CONTROLLER_BUTTON_DPAD_DOWN: return SDL_GameControllerGetAxis( gc, SDL_CONTROLLER_AXIS_LEFTY ) > far;
+	case SDL_CONTROLLER_BUTTON_DPAD_LEFT: return SDL_GameControllerGetAxis( gc, SDL_CONTROLLER_AXIS_LEFTX ) < -far;
+	case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: return SDL_GameControllerGetAxis( gc, SDL_CONTROLLER_AXIS_LEFTX ) > far;
+	}
+	return false;
+}
+
+/*
+=============
 MiSTer_ButtonEvent
 
 In the menu and the console the buttons that confirm and go back are the ones
@@ -353,7 +378,7 @@ whatever they do in the game. Returns false for a button that is not for the
 engine now.
 =============
 */
-static qboolean MiSTer_ButtonEvent( int button, int down, int *key )
+static qboolean MiSTer_ButtonEvent( SDL_JoystickID which, int button, int down, int *key )
 {
 	qboolean game = cls.key_dest == key_game;
 
@@ -375,7 +400,9 @@ static qboolean MiSTer_ButtonEvent( int button, int down, int *key )
 	case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
 	case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
 	case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
-		return true;
+		// MiSTer presses the d-pad as well when the left stick is pushed far.
+		// In the game the stick is the stick: strafing must not turn too
+		return !game || !down || !MiSTer_StickHoldsDpad( which, button );
 	default:
 		// the buttons of the game's actions: released wherever they were pressed
 		return game || !down;
@@ -403,7 +430,7 @@ void SDLash_HandleGameControllerEvent( SDL_Event *ev )
 		{
 			int key = g_button_mapping[x];
 #ifdef MISTER_HYBRID
-			if( !MiSTer_ButtonEvent( x, ev->cbutton.state, &key ))
+			if( !MiSTer_ButtonEvent( ev->cbutton.which, x, ev->cbutton.state, &key ))
 				break;
 #endif
 			Key_Event( key, ev->cbutton.state );

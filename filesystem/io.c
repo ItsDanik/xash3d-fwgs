@@ -46,6 +46,48 @@ static void FS_Purge( file_t *file )
 	file->ungetc = EOF;
 }
 
+#define FILE_PRINT_SIZE		(32 * 1024)
+
+/*
+====================
+FS_FlushPrint
+
+Write the text that FS_Printf and FS_Print have collected. Everything else
+that touches the file calls this first.
+====================
+*/
+static void FS_FlushPrint( file_t *file )
+{
+	if( !file->print_len )
+		return;
+
+	size_t len = file->print_len;
+	file->print_len = 0;
+
+	if( write( file->handle, file->print_buff, len ) < 0 )
+		return;
+
+	file->position = lseek( file->handle, 0, SEEK_CUR );
+	if( file->real_length < file->position )
+		file->real_length = file->position;
+}
+
+static int FS_AddPrint( file_t *file, const char *text, size_t len )
+{
+	if( !file->print_buff )
+		file->print_buff = Mem_Malloc( fs_mempool, FILE_PRINT_SIZE );
+
+	if( file->print_len + len > FILE_PRINT_SIZE )
+		FS_FlushPrint( file );
+
+	if( len > FILE_PRINT_SIZE )
+		return write( file->handle, text, len );
+
+	memcpy( file->print_buff + file->print_len, text, len );
+	file->print_len += len;
+	return len;
+}
+
 static void *FS_CustomAlloc( size_t size )
 {
 	return Mem_Malloc( fs_mempool, size );
@@ -130,6 +172,11 @@ int FS_Close( file_t *file )
 	FS_BackupFileName( file, NULL, 0 );
 
 	if( file->handle >= 0 )
+		FS_FlushPrint( file );
+	if( file->print_buff )
+		Mem_Free( file->print_buff );
+
+	if( file->handle >= 0 )
 	{
 		if( close( file->handle ))
 			return EOF;
@@ -155,6 +202,8 @@ flushes written data to disk
 int FS_Flush( file_t *file )
 {
 	if( !file ) return 0;
+
+	FS_FlushPrint( file );
 
 	// purge cached data
 	FS_Purge( file );
@@ -184,6 +233,8 @@ fs_offset_t FS_Write( file_t *file, const void *data, size_t datasize )
 
 	if( !file ) return 0;
 
+	FS_FlushPrint( file );
+
 	// if necessary, seek to the exact file position we're supposed to be
 	if( file->buff_ind != file->buff_len )
 		lseek( file->handle, file->buff_ind - file->buff_len, SEEK_CUR );
@@ -212,6 +263,9 @@ Read up to "buffersize" bytes from a file
 */
 fs_offset_t FS_Read( file_t *file, void *buffer, size_t buffersize )
 {
+	if( file && file->print_len )
+		FS_FlushPrint( file );
+
 	fs_offset_t done;
 	fs_offset_t nb;
 	fs_offset_t count;
@@ -384,7 +438,8 @@ Print a string into a file
 */
 int FS_Print( file_t *file, const char *msg )
 {
-	return FS_Write( file, msg, Q_strlen( msg ));
+	if( !file ) return 0;
+	return FS_AddPrint( file, msg, Q_strlen( msg ));
 }
 
 /*
@@ -433,7 +488,7 @@ int FS_VPrintf( file_t *file, const char *format, va_list ap )
 		buff_size *= 2;
 	}
 
-	len = write( file->handle, tempbuff, len );
+	len = FS_AddPrint( file, tempbuff, len );
 	Mem_Free( tempbuff );
 
 	return len;
@@ -519,6 +574,8 @@ NOTE: it's not compatible with lseek!
 */
 int FS_Seek( file_t *file, fs_offset_t offset, int whence )
 {
+	FS_FlushPrint( file );
+
 	// compute the file offset
 	switch( whence )
 	{
@@ -613,7 +670,7 @@ Give the current position in a file
 fs_offset_t FS_Tell( const file_t *file )
 {
 	if( !file ) return 0;
-	return file->position - file->buff_len + file->buff_ind;
+	return file->position - file->buff_len + file->buff_ind + file->print_len;
 }
 
 /*
@@ -1039,6 +1096,8 @@ qboolean FS_FileCopy( file_t *pOutput, file_t *pInput, int fileSize )
 	if( !FBitSet( pInput->flags, FILE_DEFLATED ) && pInput->ungetc == EOF && pInput->buff_ind == pInput->buff_len )
 	{
 		off_t out_pos;
+
+		FS_FlushPrint( pOutput );
 
 		// mirror FS_Write's pre-write fixup so the output fd offset matches file_t's position
 		if( pOutput->buff_ind != pOutput->buff_len )

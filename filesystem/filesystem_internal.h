@@ -69,6 +69,12 @@ struct file_s
 	fs_offset_t buff_len; // buffer current length
 	byte		buff[FILE_BUFF_SIZE]; // intermediate buffer
 
+	// text printed into the file that is not written yet (FS_Printf, FS_Print):
+	// a config is hundreds of lines, and a write() for each of them takes
+	// seconds on a filesystem that is mounted "sync" (the MiSTer's SD card)
+	char		*print_buff;
+	size_t		print_len;
+
 #ifdef XASH_REDUCE_FD
 	const char *backup_path;
 	fs_offset_t backup_position;

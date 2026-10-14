@@ -19,6 +19,9 @@ GNU General Public License for more details.
 #include "input.h"
 #include "vid_common.h"
 #include "platform/platform.h"
+#ifdef MISTER_HYBRID
+#include "platform/mister/mister_port.h"
+#endif
 
 static CVAR_DEFINE_AUTO( vid_mode, "0", FCVAR_RENDERINFO, "current video mode index (used only for storage)" );
 static CVAR_DEFINE_AUTO( vid_rotate, "0", FCVAR_RENDERINFO|FCVAR_VIDRESTART, "screen rotation (0-3)" );
@@ -109,15 +112,20 @@ const char *VID_GetModeString( int vid_mode )
 ==================
 VID_MiSTerMode
 
-The menu and the console are made for 640x480 (interlaced on a 15kHz screen),
-the game is played in the core's 320x200
+The menu, the console and the loading screen are made for 640x480 (interlaced
+on a 15kHz screen), the game is played in the core's 320x200 or 320x240 (OSD option Resolution)
 ==================
 */
 static void VID_MiSTerMode( void )
 {
 	qboolean menu = UI_IsVisible() || cls.key_dest == key_console;
+
+	// the loading screen is a picture of 640x480 too. Not from one map to the
+	// next: the game's last frame stays on the screen then
+	if( cls.state != ca_active && cls.state != ca_cinematic && !cls.changelevel )
+		menu = true;
 	int width = menu ? 640 : 320;
-	int height = menu ? 480 : 200;
+	int height = menu ? 480 : MiSTer_GameHeight();
 
 	if( !host.hWnd || ( refState.width == width && refState.height == height ))
 		return;

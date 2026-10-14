@@ -676,11 +676,23 @@ void Host_Frame( double time )
 	if( host.framecount == 0 )
 		Con_DPrintf( "Time to first frame: %.3f seconds\n", t1 - host.starttime );
 
+#ifdef MISTER_HYBRID
+	MiSTer_Mark( MISTER_T_INPUT );
+	Host_InputFrame ();  // input frame
+	Host_ClientBegin (); // begin client
+	Host_GetCommands (); // dedicated in
+	MiSTer_Mark( MISTER_T_SERVER );
+	Host_ServerFrame (); // server frame
+	MiSTer_Mark( MISTER_T_CLIENT );
+	Host_ClientFrame (); // client frame
+	MiSTer_Mark( MISTER_T_OTHER );
+#else
 	Host_InputFrame ();  // input frame
 	Host_ClientBegin (); // begin client
 	Host_GetCommands (); // dedicated in
 	Host_ServerFrame (); // server frame
 	Host_ClientFrame (); // client frame
+#endif
 	HTTP_Run();			 // both server and client
 	XRcon_Frame();
 

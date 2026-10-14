@@ -16,6 +16,9 @@ GNU General Public License for more details.
 #include <inttypes.h>
 #include "common.h"
 #include "client.h"
+#ifdef MISTER_HYBRID
+#include "platform/mister/mister_port.h"
+#endif
 #include "net_encode.h"
 #include "cl_tent.h"
 #include "input.h"
@@ -3948,7 +3951,13 @@ void Host_ClientFrame( void )
 	SCR_UpdateScreen ();
 
 	// update audio
+#ifdef MISTER_HYBRID
+	MiSTer_Mark( MISTER_T_SOUND );
 	SND_UpdateSound ();
+	MiSTer_Mark( MISTER_T_CLIENT );
+#else
+	SND_UpdateSound ();
+#endif
 
 	// play avi-files
 	SCR_RunCinematic ();

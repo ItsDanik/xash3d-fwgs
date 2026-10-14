@@ -15,6 +15,9 @@ GNU General Public License for more details.
 
 #include "common.h"
 #include "client.h"
+#ifdef MISTER_HYBRID
+#include "platform/mister/mister_port.h"
+#endif
 #include "const.h"
 #include "entity_types.h"
 #include "vgui_draw.h"
@@ -402,6 +405,9 @@ void V_RenderView( void )
 	if( !cl.video_prepped || ( !ui_renderworld.value && UI_IsVisible() && !cl.background ))
 		return; // still loading
 
+#ifdef MISTER_HYBRID
+	MiSTer_Mark( MISTER_T_RENDER );
+#endif
 	V_CalcViewRect ();	// compute viewport rectangle
 	V_SetRefParams( &rp );
 	V_SetupViewModel ();
@@ -529,6 +535,68 @@ static void R_ShowTree( void )
 	Con_NPrintf( 0, "max recursion %d\n", world.max_recursion );
 }
 
+#ifdef MISTER_HYBRID
+/*
+==================
+V_MiSTerCursor
+
+The core's video driver has no mouse pointer of the system for the menu to
+show: the engine draws one, where the mouse is
+==================
+*/
+static void V_MiSTerCursor( void )
+{
+	// '#' black, '.' white
+	static const char *const arrow[] =
+	{
+		"#",
+		"##",
+		"#.#",
+		"#..#",
+		"#...#",
+		"#....#",
+		"#.....#",
+		"#......#",
+		"#.......#",
+		"#........#",
+		"#.....#####",
+		"#..#..#",
+		"#.# #..#",
+		"##  #..#",
+		"#    #..#",
+		"     #..#",
+		"      ##",
+	};
+	int x, y;
+
+	if( !host.mouse_visible || ( cls.key_dest != key_menu && cls.key_dest != key_console ))
+		return;
+
+	Platform_GetMousePos( &x, &y );
+
+	for( int row = 0; row < ARRAYSIZE( arrow ); row++ )
+	{
+		const char *p = arrow[row];
+
+		// runs of one colour
+		for( int col = 0; p[col]; )
+		{
+			int end = col;
+
+			while( p[end] == p[col] )
+				end++;
+			if( p[col] != ' ' )
+			{
+				int c = p[col] == '.' ? 255 : 0;
+
+				ref.dllFuncs.FillRGBA( kRenderTransTexture, x + col, y + row, end - col, 1, c, c, c, 255 );
+			}
+			col = end;
+		}
+	}
+}
+#endif
+
 /*
 ==================
 V_PostRender
@@ -539,6 +607,9 @@ void V_PostRender( void )
 {
 	qboolean		draw_2d = false;
 
+#ifdef MISTER_HYBRID
+	MiSTer_Mark( MISTER_T_HUD );
+#endif
 	ref.dllFuncs.R_AllowFog( false );
 	ref.dllFuncs.R_Set2DMode( true );
 
@@ -579,6 +650,9 @@ void V_PostRender( void )
 		Con_DrawDebug(); // must be last
 		Touch_Draw();
 		OSK_Draw();
+#ifdef MISTER_HYBRID
+		V_MiSTerCursor();
+#endif
 
 		S_ExtraUpdate();
 	}
@@ -586,7 +660,13 @@ void V_PostRender( void )
 	SCR_MakeScreenShot();
 	ref.dllFuncs.R_AllowFog( true );
 	Platform_SetTimer( 0.0f );
+#ifdef MISTER_HYBRID
+	MiSTer_Mark( MISTER_T_BLIT );
 	ref.dllFuncs.R_EndFrame();
+	MiSTer_Mark( MISTER_T_CLIENT );
+#else
+	ref.dllFuncs.R_EndFrame();
+#endif
 
 	V_CheckGammaEnd();
 }
