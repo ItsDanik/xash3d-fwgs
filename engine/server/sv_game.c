@@ -4555,6 +4555,41 @@ but Xash3D currently doesn't have any security checks
 return nullstring for now
 =============
 */
+#ifdef MISTER_HYBRID
+/*
+=============
+SV_CompareFileTime
+
+The game's COMPARE_FILE_TIME. Half-Life rebuilds a map's node graph (the
+monsters' paths, maps/graphs/<map>.nod) when the map is newer than it, and an
+installed copy has its graphs a second or two older than their maps (copied
+first): every map's graph was rebuilt on its first visit, up to 8 seconds of
+standing still on the MiSTer's ARM. A graph at most a minute older than its map
+counts as made for it; a map that was compiled again is newer by far more. A
+graph that does not load is rebuilt as before.
+=============
+*/
+#define GRAPH_TIME_SLACK 60
+
+static int GAME_EXPORT SV_CompareFileTime( const char *path1, const char *path2, int *retval )
+{
+	const char *ext = path2 ? COM_FileExtension( path2 ) : NULL;
+
+	if( !pfnCompareFileTime( path1, path2, retval ))
+		return 0;
+
+	if( *retval > 0 && ext && !Q_stricmp( ext, "nod" ))
+	{
+		int t1 = g_fsapi.FileTime( path1, false );
+		int t2 = g_fsapi.FileTime( path2, false );
+
+		if( t1 - t2 <= GRAPH_TIME_SLACK )
+			*retval = 0;
+	}
+	return 1;
+}
+#endif
+
 static const char *GAME_EXPORT pfnGetPlayerAuthId( edict_t *e )
 {
 	return SV_GetClientIDString( SV_ClientFromEdict( e, false ));
@@ -4786,7 +4821,11 @@ static enginefuncs_t gEngfuncs =
 	COM_LoadFileForMe,
 	COM_FreeFile,
 	pfnEndSection,
+#ifdef MISTER_HYBRID
+	SV_CompareFileTime,
+#else
 	pfnCompareFileTime,
+#endif
 	pfnGetGameDir,
 	pfnCvar_RegisterEngineVariable,
 	pfnFadeClientVolume,
