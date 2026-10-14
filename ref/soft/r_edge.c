@@ -1113,9 +1113,8 @@ static void D_SolidSurf( surf_t *s )
 
 	D_CalcGradients( pface );
 
-	D_DrawSpans16( s->spans );
-
-	D_DrawZSpans( s->spans );
+	// a job: the next surface is prepared meanwhile
+	D_DrawSolidSpans( s->spans );
 
 	if( s->insubmodel )
 	{
@@ -1176,6 +1175,11 @@ void D_DrawSurfaces( void )
 
 	if( !sw_drawflat.value )
 	{
+		// the spans of the solid surfaces are drawn by two threads. No two
+		// surfaces share a pixel, so the others are drawn here as before.
+		if( !alphaspans )
+			R_JobsBegin();
+
 		for( surf_t *s = &surfaces[1]; s < surface_p; s++ )
 		{
 			if( !s->spans )
@@ -1190,6 +1194,10 @@ void D_DrawSurfaces( void )
 			else
 				D_SolidSurf( s );
 		}
+
+		// the spans and the z buffer are complete when this returns
+		if( !alphaspans )
+			R_JobsFinish();
 	}
 	else
 		D_DrawflatSurfaces();

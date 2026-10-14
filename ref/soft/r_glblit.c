@@ -581,6 +581,27 @@ static qboolean R_AllocScreen( void )
 	return true;
 }
 
+// rows of the frame, from the renderer's colours to those of a 16 bit window
+typedef struct
+{
+	unsigned short *pbuf;
+	int            first, end;
+} blitrows_t;
+
+static void R_BlitRows16( const void *arg )
+{
+	const blitrows_t *rows = arg;
+
+	for( int v = rows->first; v < rows->end; v++ )
+	{
+		const pixel_t  *src = vid.buffer + vid.rowbytes * v;
+		unsigned short *dst = rows->pbuf + swblit.stride * v;
+
+		for( int u = 0; u < vid.width; u++ )
+			dst[u] = vid.screen[src[u]];
+	}
+}
+
 void R_BlitScreen( void )
 {
 	void *buffer = swblit.pLockBuffer();
@@ -659,18 +680,17 @@ void R_BlitScreen( void )
 	{
 		if( swblit.bpp == 2 )
 		{
-			unsigned short *pbuf = buffer;
-			for( int v = 0; v < vid.height; v++ )
-			{
-				uint start = vid.rowbytes * v;
-				uint dstart = swblit.stride * v;
+			// in four parts, for the two threads (r_jobs.c)
+			blitrows_t rows = { buffer, 0, 0 };
 
-				for( int u = 0; u < vid.width; u++ )
-				{
-					unsigned int s = vid.screen[vid.buffer[start + u]];
-					pbuf[dstart + u] = s;
-				}
+			R_JobsBegin();
+			for( int part = 0; part < 4; part++ )
+			{
+				rows.first = vid.height * part / 4;
+				rows.end = vid.height * ( part + 1 ) / 4;
+				R_JobAdd( R_BlitRows16, &rows, sizeof( rows ));
 			}
+			R_JobsFinish();
 		}
 		else if( swblit.bpp == 4 )
 		{

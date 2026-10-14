@@ -525,22 +525,69 @@ D_DrawSpans16
   FIXME: actually make this subdivide by 16 instead of 8!!!
 =============
 */
-void D_DrawSpans16( espan_t *pspan )
+// ( delta / count ) for the last pixels of a span, count 1..15, without a
+// division: the ARM cores of the day have none and call a function for it.
+// Never larger than the quotient, so the steps do not run off the texture.
+static inline fixed16_t D_SpanStep( fixed16_t delta, int count )
+{
+	static const unsigned int recip[16] =
+	{
+		0, 0xFFFFFFFFu, 0x80000000u, 0x55555555u, 0x40000000u, 0x33333333u, 0x2AAAAAAAu, 0x24924924u,
+		0x20000000u, 0x1C71C71Cu, 0x19999999u, 0x1745D174u, 0x15555555u, 0x13B13B13u, 0x12492492u, 0x11111111u,
+	};
+
+	if( delta >= 0 )
+		return (fixed16_t)(((unsigned long long)(unsigned int)delta * recip[count] ) >> 32 );
+	return -(fixed16_t)(((unsigned long long)(unsigned int)-delta * recip[count] ) >> 32 );
+}
+
+// The names of the globals a surface is drawn with, as locals from *p: the
+// same code draws the surface of the globals and one that was handed to
+// another thread
+#define SPAN_PARMS_TEXTURE( p ) \
+	pixel_t *const cacheblock = ( p )->cacheblock; \
+	const int cachewidth = ( p )->cachewidth; \
+	const float d_sdivzstepu = ( p )->d_sdivzstepu, d_tdivzstepu = ( p )->d_tdivzstepu; \
+	const float d_sdivzstepv = ( p )->d_sdivzstepv, d_tdivzstepv = ( p )->d_tdivzstepv; \
+	const float d_sdivzorigin = ( p )->d_sdivzorigin, d_tdivzorigin = ( p )->d_tdivzorigin; \
+	const fixed16_t sadjust = ( p )->sadjust, tadjust = ( p )->tadjust; \
+	const fixed16_t bbextents = ( p )->bbextents, bbextentt = ( p )->bbextentt
+#define SPAN_PARMS_Z( p ) \
+	const float d_zistepu = ( p )->d_zistepu, d_zistepv = ( p )->d_zistepv, d_ziorigin = ( p )->d_ziorigin
+
+static void D_GetSpanParms( spanparms_t *p, espan_t *spans )
+{
+	p->spans = spans;
+	p->cacheblock = cacheblock;
+	p->cachewidth = cachewidth;
+	p->d_sdivzstepu = d_sdivzstepu, p->d_tdivzstepu = d_tdivzstepu, p->d_zistepu = d_zistepu;
+	p->d_sdivzstepv = d_sdivzstepv, p->d_tdivzstepv = d_tdivzstepv, p->d_zistepv = d_zistepv;
+	p->d_sdivzorigin = d_sdivzorigin, p->d_tdivzorigin = d_tdivzorigin, p->d_ziorigin = d_ziorigin;
+	p->sadjust = sadjust, p->tadjust = tadjust;
+	p->bbextents = bbextents, p->bbextentt = bbextentt;
+}
+
+static void D_DrawZSpansParms( espan_t *pspan, const spanparms_t *parms );
+
+static void D_DrawSpans16Parms( espan_t *pspan, const spanparms_t *parms )
 {
 	int       count, spancount;
 	pixel_t   *pbase, *pdest;
 	fixed16_t s, t, snext, tnext, sstep, tstep;
 	float     sdivz, tdivz, zi, z, du, dv, spancountminus1;
 	float     sdivz8stepu, tdivz8stepu, zi8stepu;
+	SPAN_PARMS_TEXTURE( parms );
+	SPAN_PARMS_Z( parms );
 
 	sstep = 0; // keep compiler happy
 	tstep = 0; // ditto
 
 	pbase = cacheblock;
 
-	sdivz8stepu = d_sdivzstepu * 8;
-	tdivz8stepu = d_tdivzstepu * 8;
-	zi8stepu = d_zistepu * 8;
+	// the perspective is worked out every 16 pixels
+	sdivz8stepu = d_sdivzstepu * 16;
+	tdivz8stepu = d_tdivzstepu * 16;
+	zi8stepu = d_zistepu * 16;
 
 	do
 	{
@@ -573,8 +620,8 @@ void D_DrawSpans16( espan_t *pspan )
 		do
 		{
 			// calculate s and t at the far end of the span
-			if( count >= 8 )
-				spancount = 8;
+			if( count >= 16 )
+				spancount = 16;
 			else
 				spancount = count;
 
@@ -592,19 +639,19 @@ void D_DrawSpans16( espan_t *pspan )
 				snext = (int)( sdivz * z ) + sadjust;
 				if( snext > bbextents )
 					snext = bbextents;
-				else if( snext < 8 )
-					snext = 8; // prevent round-off error on <0 steps from
+				else if( snext < 16 )
+					snext = 16; // prevent round-off error on <0 steps from
 				//  from causing overstepping & running off the
 				//  edge of the texture
 
 				tnext = (int)( tdivz * z ) + tadjust;
 				if( tnext > bbextentt )
 					tnext = bbextentt;
-				else if( tnext < 8 )
-					tnext = 8; // guard against round-off error on <0 steps
+				else if( tnext < 16 )
+					tnext = 16; // guard against round-off error on <0 steps
 
-				sstep = ( snext - s ) >> 3;
-				tstep = ( tnext - t ) >> 3;
+				sstep = ( snext - s ) >> 4;
+				tstep = ( tnext - t ) >> 4;
 			}
 			else
 			{
@@ -620,21 +667,21 @@ void D_DrawSpans16( espan_t *pspan )
 				snext = (int)( sdivz * z ) + sadjust;
 				if( snext > bbextents )
 					snext = bbextents;
-				else if( snext < 8 )
-					snext = 8; // prevent round-off error on <0 steps from
+				else if( snext < 16 )
+					snext = 16; // prevent round-off error on <0 steps from
 				//  from causing overstepping & running off the
 				//  edge of the texture
 
 				tnext = (int)( tdivz * z ) + tadjust;
 				if( tnext > bbextentt )
 					tnext = bbextentt;
-				else if( tnext < 8 )
-					tnext = 8; // guard against round-off error on <0 steps
+				else if( tnext < 16 )
+					tnext = 16; // guard against round-off error on <0 steps
 
 				if( spancount > 1 )
 				{
-					sstep = ( snext - s ) / ( spancount - 1 );
-					tstep = ( tnext - t ) / ( spancount - 1 );
+					sstep = D_SpanStep( snext - s, spancount - 1 );
+					tstep = D_SpanStep( tnext - t, spancount - 1 );
 				}
 			}
 
@@ -687,6 +734,39 @@ void D_DrawSpans16( espan_t *pspan )
 	while(( pspan = pspan->pnext ) != NULL );
 }
 
+
+void D_DrawSpans16( espan_t *pspan )
+{
+	spanparms_t parms;
+
+	D_GetSpanParms( &parms, pspan );
+	D_DrawSpans16Parms( pspan, &parms );
+}
+
+static void D_SolidSpansJob( const void *arg )
+{
+	const spanparms_t *parms = arg;
+
+	D_DrawSpans16Parms( parms->spans, parms );
+	D_DrawZSpansParms( parms->spans, parms );
+}
+
+/*
+=============
+D_DrawSolidSpans
+
+The texture and the z of the spans of a surface, with the globals as
+D_CalcGradients left them. Between R_JobsBegin and R_JobsFinish they are
+drawn at some time before those return, on either thread.
+=============
+*/
+void D_DrawSolidSpans( espan_t *spans )
+{
+	spanparms_t parms;
+
+	D_GetSpanParms( &parms, spans );
+	R_JobAdd( D_SolidSpansJob, &parms, sizeof( parms ));
+}
 
 /*
 =============
@@ -1308,6 +1388,15 @@ D_DrawZSpans
 */
 void D_DrawZSpans( espan_t *pspan )
 {
+	spanparms_t parms;
+
+	parms.d_zistepu = d_zistepu, parms.d_zistepv = d_zistepv, parms.d_ziorigin = d_ziorigin;
+	D_DrawZSpansParms( pspan, &parms );
+}
+
+static void D_DrawZSpansParms( espan_t *pspan, const spanparms_t *parms )
+{
+	SPAN_PARMS_Z( parms );
 // FIXME: check for clamping/range problems
 // we count on FP exceptions being turned off to avoid range problems
 	int izistep = (int)( d_zistepu * 0x8000 * 0x10000 );

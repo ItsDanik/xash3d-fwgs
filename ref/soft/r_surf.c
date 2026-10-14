@@ -1139,6 +1139,9 @@ surfcache_t *D_CacheSurface( msurface_t *surface, int miplevel )
 //
 	if( !cache ) // if a texture just animated, don't reallocate it
 	{
+		// room is made by throwing out the textures of other surfaces, and
+		// spans that are still to be drawn may be of one of them
+		R_JobsDrain();
 		cache = D_SCAlloc( r_drawsurf.surfwidth,
 				   r_drawsurf.surfwidth * r_drawsurf.surfheight * 2 );
 		CACHESPOT( surface )[miplevel] = cache;

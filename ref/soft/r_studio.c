@@ -1676,6 +1676,113 @@ static int R_StudioMeshCompare( const sortedmesh_t *a, const sortedmesh_t *b )
 }
 
 /*
+====================
+R_StudioDrawNormalMeshFast
+
+What R_StudioDrawNormalMesh does through the TriAPI for an opaque model,
+without its five calls per vertex: a vertex is transformed and projected once
+for the submodel, however many strips it is part of, and its texture
+coordinates are not put through fmodf() when they are in the texture, as a
+model's are.
+====================
+*/
+static finalvert_t g_fastverts[MAXSTUDIOVERTS];
+static uint        g_fastvertstamp[MAXSTUDIOVERTS];
+static uint        g_faststamp; // of this call of R_StudioDrawPoints
+
+// TriTexCoord2f
+static inline int R_StudioSkinCoord( float u, int size )
+{
+	double u1 = 0;
+
+	// in the texture, as a model's are: no need for double precision either
+	if( u >= 0.0f && u <= 1.0f )
+		return (short)( size * bound( 0.01f, u, 0.99f ));
+
+	{
+		u = fmodf( u, 10 );
+		if( u < 1000 && u > -1000 )
+			u1 = u;
+		while( u1 < 0 )
+			u1 = u1 + 1;
+		while( u1 > 1 )
+			u1 = u1 - 1;
+	}
+
+	return (short)( size * bound( 0.01, u1, 0.99 ));
+}
+
+static void R_StudioDrawNormalMeshFast( short *ptricmds, vec3_t *pstudionorms, float s, float t )
+{
+	finalvert_t triv[3];
+	int         i;
+
+	while(( i = *( ptricmds++ )))
+	{
+		qboolean fan = i < 0;
+		int      vertcount = 0, n = 0;
+
+		if( fan )
+			i = -i;
+
+		for( ; i > 0; i--, ptricmds += 4 )
+		{
+			int         idx = ptricmds[0];
+			finalvert_t *cv = &g_fastverts[idx];
+			finalvert_t *fv;
+			rgba_t      color;
+			uint        light;
+
+			if( g_fastvertstamp[idx] != g_faststamp )
+			{
+				const float *v = g_studio.verts[idx];
+
+				R_SetupFinalVert( cv, v[0], v[1], v[2], 0, 0, 0 );
+				g_fastvertstamp[idx] = g_faststamp;
+			}
+
+			// R_StudioSetColorBegin, TriColor4ub
+			R_LightLambert( g_studio.lightpos[idx], pstudionorms[ptricmds[1]], (float *)g_studio.lightvalues[ptricmds[1]], color );
+			light = (( color[0] + color[1] + color[2] ) * 2656 ) >> 16; // * 31 / ( 3 * 255 )
+			if( light > 31 )
+				light = 31;
+
+			// TriVertex3f
+			fv = fan ? &triv[vertcount] : &triv[n];
+			*fv = *cv;
+			fv->l = light << 8;
+			fv->s = R_StudioSkinCoord( ptricmds[2] * s, r_affinetridesc.skinwidth ) << 16;
+			fv->t = R_StudioSkinCoord( ptricmds[3] * t, r_affinetridesc.skinheight ) << 16;
+
+			if( fan )
+			{
+				vertcount++;
+				if( vertcount >= 3 )
+				{
+					R_RenderTriangle( &triv[0], &triv[1], &triv[2] );
+					triv[1] = triv[2];
+					vertcount = 2;
+				}
+			}
+			else
+			{
+				n++;
+				vertcount++;
+				if( n == 3 )
+					n = 0;
+				if( vertcount >= 3 )
+				{
+					if( vertcount & 1 )
+						R_RenderTriangle( &triv[0], &triv[1], &triv[2] );
+					else
+						R_RenderTriangle( &triv[2], &triv[1], &triv[0] );
+				}
+			}
+		}
+	}
+}
+
+/*
 ===============
 R_StudioDrawNormalMesh
 
@@ -1685,6 +1792,12 @@ generic path
 static void R_StudioDrawNormalMesh( short *ptricmds, vec3_t *pstudionorms, float s, float t )
 {
 	int   i;
+
+	if( vid.rendermode == kRenderNormal && !vid.is2d )
+	{
+		R_StudioDrawNormalMeshFast( ptricmds, pstudionorms, s, t );
+		return;
+	}
 
 	while(( i = *( ptricmds++ )))
 	{
@@ -1856,6 +1969,9 @@ static void R_StudioDrawPoints( void )
 			R_LightStrength( pvertbone[i], pstudioverts[i], g_studio.lightpos[i] );
 		}
 	}
+
+	// the vertices of this call are others than those of the last one
+	g_faststamp++;
 
 	// generate shared normals for properly scaling glowing shell
 	if( RI.currententity->curstate.renderfx == kRenderFxGlowShell )

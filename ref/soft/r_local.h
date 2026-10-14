@@ -906,6 +906,31 @@ extern float        d_scalemip[3];
 
 // ===================================================================
 
+// what a surface's spans are drawn with: a copy of the globals of that name,
+// for the spans that are drawn on another thread (r_jobs.c)
+typedef struct
+{
+	struct espan_s *spans;
+	pixel_t        *cacheblock;
+	int            cachewidth;
+	float          d_sdivzstepu, d_tdivzstepu, d_zistepu;
+	float          d_sdivzstepv, d_tdivzstepv, d_zistepv;
+	float          d_sdivzorigin, d_tdivzorigin, d_ziorigin;
+	fixed16_t      sadjust, tadjust;
+	fixed16_t      bbextents, bbextentt;
+} spanparms_t;
+
+// r_scan.c: D_DrawSpans16 and D_DrawZSpans of the surface of the globals, as a job
+void D_DrawSolidSpans( struct espan_s *spans );
+
+// r_jobs.c
+#define RJOB_ARG_SIZE 96
+typedef void (*rjob_t)( const void *arg );
+void R_JobsBegin( void );
+void R_JobAdd( rjob_t fn, const void *arg, size_t size );
+void R_JobsDrain( void );
+void R_JobsFinish( void );
+
 extern int     cachewidth;
 extern pixel_t *cacheblock;
 extern int     r_screenwidth;
