@@ -123,6 +123,12 @@ qboolean SW_CreateBuffer( int width, int height, uint *stride, uint *bpp, uint *
 
 	if( !sw.renderer )
 	{
+#ifdef MISTER_HYBRID
+		// R_BlitScreen writes all of every frame: straight into the buffer
+		// that goes to the core, a copy less (the surface's pixels change
+		// with every frame, SW_LockBuffer gets them each time)
+		SDL_SetHint( "SDL_MISTER_DIRECT", "1" );
+#endif
 		sw.win = SDL_GetWindowSurface( host.hWnd );
 
 		// sdl will create renderer if hw framebuffer unavailiable, so cannot fallback here
