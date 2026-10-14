@@ -1006,8 +1006,11 @@ void CL_ParseClientData( sizebuf_t *msg, connprotocol_t proto )
 	// did we drop some frames?
 	if( i > cl.last_incoming_sequence + 1 )
 	{
-		// mark as dropped
-		for( j = cl.last_incoming_sequence + 1; j < i; j++ )
+		// mark as dropped: the last CL_UPDATE_BACKUP of them are every slot there is.
+		// The first message of a connection comes after the server's random first
+		// sequence (up to 2^27), which was a loop of millions (seconds on an ARM)
+		j = Q_max( cl.last_incoming_sequence + 1, i - CL_UPDATE_BACKUP );
+		for( ; j < i; j++ )
 		{
 			if( cl.frames[j & CL_UPDATE_MASK].receivedtime >= 0.0 )
 			{

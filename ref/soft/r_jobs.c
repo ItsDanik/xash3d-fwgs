@@ -48,6 +48,8 @@ static int       job_done;  // how many are finished
 static int       job_active;
 static qboolean  job_thread; // there is a helper
 static qboolean  job_tried;
+static qboolean  job_ordered; // one job at a time, in order (R_JobsOrdered)
+static qboolean  job_helper_took; // the helper has taken one since R_JobsBegin
 static sem_t     job_wake;
 static pthread_t job_pthread;
 
@@ -55,15 +57,25 @@ static pthread_t job_pthread;
 #define STORE( x, v ) __atomic_store_n( &( x ), ( v ), __ATOMIC_SEQ_CST )
 
 // false: none left
-static qboolean R_JobTake( void )
+static qboolean R_JobTake( qboolean helper )
 {
 	int i = LOAD( job_head );
 
 	if( i >= LOAD( job_tail ))
 		return false;
 
+	if( LOAD( job_ordered ))
+	{
+		// one at a time, the next when the last is finished; and once the
+		// helper has started, it keeps them: a model's data stays in its cache
+		if( LOAD( job_done ) != i || ( !helper && LOAD( job_helper_took )))
+			return true;
+	}
+
 	if( __atomic_compare_exchange_n( &job_head, &i, i + 1, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST ))
 	{
+		if( helper )
+			STORE( job_helper_took, true );
 		jobs[i].fn( jobs[i].arg );
 		__atomic_add_fetch( &job_done, 1, __ATOMIC_SEQ_CST );
 	}
@@ -78,7 +90,7 @@ static void *R_JobThread( void *unused )
 
 		while( LOAD( job_active ))
 		{
-			if( !R_JobTake( ))
+			if( !R_JobTake( true ))
 				sched_yield(); // Main_MiSTer gets a turn while the renderer makes the next job
 		}
 	}
@@ -126,6 +138,7 @@ void R_JobsBegin( void )
 	STORE( job_tail, 0 );
 	STORE( job_head, 0 );
 	STORE( job_done, 0 );
+	STORE( job_helper_took, false );
 
 	if( job_thread )
 	{
@@ -175,7 +188,7 @@ void R_JobsDrain( void )
 	if( !LOAD( job_active ))
 		return;
 
-	while( R_JobTake( ))
+	while( R_JobTake( false ))
 		;
 
 	// the helper may be in its last one
@@ -187,6 +200,30 @@ void R_JobsFinish( void )
 {
 	R_JobsDrain();
 	STORE( job_active, 0 );
+}
+
+// there is a helper thread
+qboolean R_JobsAvailable( void )
+{
+	if( !job_tried )
+		R_JobsInit();
+	return job_thread;
+}
+
+/*
+================
+R_JobsOrdered
+
+Until R_JobsOrdered( false ): a job starts when the one before it is finished,
+so that they are done one after the other in the order they were added
+(models that draw over each other). The helper takes them while this thread
+prepares the next. If it has not started on them when this thread drains (it
+was asleep), this thread does them itself.
+================
+*/
+void R_JobsOrdered( qboolean ordered )
+{
+	STORE( job_ordered, ordered );
 }
 
 #else // !MISTER_HYBRID
@@ -205,6 +242,15 @@ void R_JobsDrain( void )
 }
 
 void R_JobsFinish( void )
+{
+}
+
+qboolean R_JobsAvailable( void )
+{
+	return false;
+}
+
+void R_JobsOrdered( qboolean ordered )
 {
 }
 

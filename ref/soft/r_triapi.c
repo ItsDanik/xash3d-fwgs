@@ -57,6 +57,10 @@ begin triangle sequence
 */
 void GAME_EXPORT TriBegin( int mode1 )
 {
+#ifdef MISTER_HYBRID
+	// the triangle code is the helper's while it draws models
+	R_StudioJobsSync();
+#endif
 	if( mode1 == TRI_QUADS )
 		mode1 = TRI_TRIANGLE_FAN;
 	mode = mode1;

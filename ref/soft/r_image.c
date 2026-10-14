@@ -44,6 +44,11 @@ void GAME_EXPORT GL_Bind( int tmu, unsigned int texnum )
 {
 	image_t *image = &r_images[texnum];
 
+#ifdef MISTER_HYBRID
+	// the triangle code is the helper's while it draws models
+	R_StudioJobsSync();
+#endif
+
 	if( vid.rendermode == kRenderNormal )
 	{
 		r_affinetridesc.pskin = image->pixels[0];

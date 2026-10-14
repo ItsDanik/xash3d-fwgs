@@ -1712,8 +1712,90 @@ static inline int R_StudioSkinCoord( float u, int size )
 	return (short)( size * bound( 0.01, u1, 0.99 ));
 }
 
+/*
+R_StudioSkinCoord( cmd * scale, size ) of every cmd from 0 to the width or
+height of the skin, worked out once: the coordinates of a model's strips are
+texels of its skin, and a conversion from float to integer for each of them,
+every frame, was a quarter of R_StudioDrawPoints on the MiSTer's ARM.
+*/
+#define SKINCOORD_TABLES 64
+#define SKINCOORD_MAX    1024
+
+typedef struct
+{
+	float scale;
+	int   size;
+	int   max;
+	uint  used; // when it was last asked for: the one asked for longest ago goes
+	short v[SKINCOORD_MAX + 1];
+} skincoordtable_t;
+
+static skincoordtable_t skincoord_tables[SKINCOORD_TABLES];
+static int              skincoord_count;
+static uint             skincoord_clock;
+
+// The table of the s and of the t coordinate of a mesh are asked for one after
+// the other: the second never takes the place of the first
+static const skincoordtable_t *R_StudioSkinCoordTable( float scale, int size )
+{
+	skincoordtable_t *t;
+	int              i;
+
+	for( i = 0; i < skincoord_count; i++ )
+	{
+		t = &skincoord_tables[i];
+		if( t->scale == scale && t->size == size )
+		{
+			t->used = ++skincoord_clock;
+			return t;
+		}
+	}
+
+	if( skincoord_count < SKINCOORD_TABLES )
+		t = &skincoord_tables[skincoord_count++];
+	else
+	{
+		t = &skincoord_tables[0];
+		for( i = 1; i < SKINCOORD_TABLES; i++ )
+		{
+			if( skincoord_clock - skincoord_tables[i].used > skincoord_clock - t->used )
+				t = &skincoord_tables[i];
+		}
+	}
+
+	t->scale = scale;
+	t->size = size;
+	t->used = ++skincoord_clock;
+	t->max = 1.0f / scale + 1.0f < SKINCOORD_MAX ? (int)( 1.0f / scale + 1.0f ) : SKINCOORD_MAX;
+	for( i = 0; i <= t->max; i++ )
+		t->v[i] = R_StudioSkinCoord( i * scale, size );
+	return t;
+}
+
+static inline int R_StudioSkinCoordFrom( const skincoordtable_t *t, int cmd )
+{
+	if( (unsigned)cmd <= (unsigned)t->max )
+		return t->v[cmd];
+	return R_StudioSkinCoord( cmd * t->scale, t->size );
+}
+
+// the light of a vertex from the light value of its normal, without local lights
+static inline uint R_StudioNormalLight( const vec3_t lightvalue )
+{
+	rgba_t color;
+	uint   light;
+
+	VectorScale( lightvalue, 255.0f, color );
+	light = (( color[0] + color[1] + color[2] ) * 2656 ) >> 16; // * 31 / ( 3 * 255 )
+	return light > 31 ? 31 : light;
+}
+
+static uint g_normlight[MAXSTUDIOVERTS]; // R_StudioNormalLight of each normal
+
 static void R_StudioDrawNormalMeshFast( short *ptricmds, vec3_t *pstudionorms, float s, float t )
 {
+	const skincoordtable_t *stab = R_StudioSkinCoordTable( s, r_affinetridesc.skinwidth );
+	const skincoordtable_t *ttab = R_StudioSkinCoordTable( t, r_affinetridesc.skinheight );
 	finalvert_t triv[3];
 	int         i;
 
@@ -1742,17 +1824,22 @@ static void R_StudioDrawNormalMeshFast( short *ptricmds, vec3_t *pstudionorms, f
 			}
 
 			// R_StudioSetColorBegin, TriColor4ub
-			R_LightLambert( g_studio.lightpos[idx], pstudionorms[ptricmds[1]], (float *)g_studio.lightvalues[ptricmds[1]], color );
-			light = (( color[0] + color[1] + color[2] ) * 2656 ) >> 16; // * 31 / ( 3 * 255 )
-			if( light > 31 )
-				light = 31;
+			if( g_studio.numlocallights )
+			{
+				R_LightLambert( g_studio.lightpos[idx], pstudionorms[ptricmds[1]], (float *)g_studio.lightvalues[ptricmds[1]], color );
+				light = (( color[0] + color[1] + color[2] ) * 2656 ) >> 16; // * 31 / ( 3 * 255 )
+				if( light > 31 )
+					light = 31;
+			}
+			else
+				light = g_normlight[ptricmds[1]];
 
 			// TriVertex3f
 			fv = fan ? &triv[vertcount] : &triv[n];
 			*fv = *cv;
 			fv->l = light << 8;
-			fv->s = R_StudioSkinCoord( ptricmds[2] * s, r_affinetridesc.skinwidth ) << 16;
-			fv->t = R_StudioSkinCoord( ptricmds[3] * t, r_affinetridesc.skinheight ) << 16;
+			fv->s = R_StudioSkinCoordFrom( stab, ptricmds[2] ) << 16;
+			fv->t = R_StudioSkinCoordFrom( ttab, ptricmds[3] ) << 16;
 
 			if( fan )
 			{
@@ -1906,6 +1993,688 @@ static void R_StudioDrawChromeMesh( short *ptricmds, vec3_t *pstudionorms, float
 }
 
 
+#ifdef MISTER_HYBRID
+/*
+===============================================================================
+
+STUDIO MODELS ON THE HELPER THREAD
+
+The opaque models of the solid entities (nearly all of them) are drawn on the
+helper thread (r_jobs.c), a submodel per job, while this thread goes on with
+the next model and the client library's work for it. A job has a copy of all
+it reads of g_studio, and buffers of its own for the vertices; the triangle
+code's globals (r_polyse.c, r_aclip.c, r_affinetridesc) are the helper's
+between R_StudioJobsBegin() and R_StudioJobsEnd(): this thread finishes the
+jobs (R_StudioJobsSync) before it binds a texture, begins TriAPI triangles,
+draws a brush or sprite entity or a model the jobs cannot draw. The jobs are
+done one at a time, in order (R_JobsOrdered), so the models are drawn in the
+same order as before; what the helper has not taken when this thread gets to
+the end, this thread draws itself.
+
+A job is two stages: the vertices (bones, light, projection, into buffers of
+the job's own) and the triangles. The first can be done by either thread: when
+this thread has to wait for the helper, it does the vertices of the jobs the
+helper has not got to yet, from the last one back (R_StudioJobsHelp).
+
+===============================================================================
+*/
+typedef struct
+{
+	studiohdr_t      *hdr;
+	mstudiomodel_t   *submodel;
+	mstudiotexture_t *ptexture;   // the header's: the flags
+	mstudiotexture_t *pskintex;   // remapped or the header's: what is drawn
+	short            *pskinref;
+	int              forceflags;  // g_nForceFaceFlags
+	int              whiteskin;   // tr.whiteTexture instead of the skins, or 0
+	qboolean         sort;        // r_studio_sort_textures
+	qboolean         flipviewmodel;
+	float            ambientlight, shadelight;
+	vec3_t           lightcolor;
+	int              numlocallights;
+	vec3_t           locallightorigin[MAX_LOCALLIGHTS];
+	uint             locallightcolor[MAX_LOCALLIGHTS][3];
+	float            locallightR2[MAX_LOCALLIGHTS];
+	float            aliastransform[3][4];
+	vec3_t           chrome_origin, vright;
+	matrix3x4        *bones;          // hdr->numbones of each
+	vec3_t           *blightvec;
+	matrix3x4        *lighttransform; // only with local lights or chrome
+
+	// what the vertex stage makes
+	int              numnorms;
+	finalvert_t      *fverts;        // [submodel->numverts]
+	vec4_t           ( *lightpos )[MAX_LOCALLIGHTS]; // [numverts], with local lights
+	vec3_t           *lightvalues;   // [numnorms], with local lights or chrome
+	uint             *normlight;     // [numnorms]
+	vec2_t           *chrome;        // [numnorms], with chrome
+	sortedmesh_t     *meshes;        // [submodel->nummesh], in the order they are drawn
+	int              stage;          // of the vertices: 0 not begun, 1 being done, 2 done
+} studiojob_t;
+
+#define STUDIO_ARENA_SIZE ( 4 << 20 )
+static byte        studio_arena[STUDIO_ARENA_SIZE] __attribute__(( aligned( 16 )));
+static size_t      studio_arena_used;
+static qboolean    studio_jobs; // between R_StudioJobsBegin and R_StudioJobsEnd
+static studiojob_t *studio_joblist[1024]; // since the last R_StudioJobsSync, for R_StudioJobsHelp
+static int         studio_numjobs;
+
+// of the thread that does a job's vertices
+static __thread vec3_t sj_lightbonepos[MAXSTUDIOBONES][MAX_LOCALLIGHTS];
+static __thread uint   sj_lightage[MAXSTUDIOBONES];
+static __thread uint   sj_age;
+static __thread vec3_t sj_chromeup[MAXSTUDIOBONES], sj_chromeright[MAXSTUDIOBONES];
+static __thread uint   sj_chromeage[MAXSTUDIOBONES];
+
+static void R_StudioJobVertices( studiojob_t *job );
+
+/*
+===============
+R_StudioJobsHelp
+
+While the helper draws, the vertices of the jobs it has not taken yet, from
+the last one back, until one it has.
+===============
+*/
+static void R_StudioJobsHelp( void )
+{
+	for( int i = studio_numjobs - 1; i >= 0; i-- )
+	{
+		studiojob_t *job = studio_joblist[i];
+		int         expect = 0;
+
+		if( !__atomic_compare_exchange_n( &job->stage, &expect, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE ))
+			break;
+		R_StudioJobVertices( job );
+		__atomic_store_n( &job->stage, 2, __ATOMIC_RELEASE );
+	}
+	studio_numjobs = 0;
+}
+
+void R_StudioJobsBegin( void )
+{
+	if( studio_jobs || !R_JobsAvailable( ))
+		return;
+	R_JobsOrdered( true );
+	R_JobsBegin();
+	studio_arena_used = 0;
+	studio_jobs = true;
+}
+
+void R_StudioJobsSync( void )
+{
+	if( !studio_jobs )
+		return;
+	R_StudioJobsHelp();
+	R_JobsDrain();
+	studio_arena_used = 0;
+}
+
+void R_StudioJobsEnd( void )
+{
+	if( !studio_jobs )
+		return;
+	R_StudioJobsHelp();
+	R_JobsFinish();
+	R_JobsOrdered( false );
+	studio_numjobs = 0;
+	studio_arena_used = 0;
+	studio_jobs = false;
+}
+
+static void *R_StudioJobAlloc( size_t size )
+{
+	void *p;
+
+	size = ( size + 15 ) & ~15;
+	if( studio_arena_used + size > STUDIO_ARENA_SIZE )
+		R_StudioJobsSync();
+	p = studio_arena + studio_arena_used;
+	studio_arena_used += size;
+	return p;
+}
+
+// R_LightStrength, R_StudioLighting and R_LightLambert with the job's copy
+static void R_StudioJobLightStrength( const studiojob_t *job, int bone, vec3_t localpos, vec4_t light[MAX_LOCALLIGHTS] )
+{
+	int i;
+
+	if( sj_lightage[bone] != sj_age )
+	{
+		for( i = 0; i < job->numlocallights; i++ )
+			Matrix3x4_VectorITransform( job->lighttransform[bone], job->locallightorigin[i], sj_lightbonepos[bone][i] );
+		sj_lightage[bone] = sj_age;
+	}
+
+	for( i = 0; i < job->numlocallights; i++ )
+	{
+		VectorSubtract( localpos, sj_lightbonepos[bone][i], light[i] );
+		light[i][3] = 0.0f;
+	}
+}
+
+static void R_StudioJobLighting( const studiojob_t *job, float *lv, int bone, int flags, vec3_t normal )
+{
+	float illum;
+
+	if( FBitSet( flags, STUDIO_NF_FULLBRIGHT ))
+	{
+		*lv = 1.0f;
+		return;
+	}
+
+	illum = job->ambientlight;
+
+	if( FBitSet( flags, STUDIO_NF_FLATSHADE ))
+	{
+		illum += job->shadelight * 0.8f;
+	}
+	else
+	{
+		float r, lightcos;
+
+		lightcos = DotProduct( normal, job->blightvec[bone] );
+		if( lightcos > 1.0f )
+			lightcos = 1.0f;
+
+		illum += job->shadelight;
+
+		r = SHADE_LAMBERT;
+
+		// do modified hemispherical lighting
+		if( r <= 1.0f )
+		{
+			r += 1.0f;
+			lightcos = (( r - 1.0f ) - lightcos ) / r;
+			if( lightcos > 0.0f )
+				illum += job->shadelight * lightcos;
+		}
+		else
+		{
+			lightcos = ( lightcos + ( r - 1.0f )) / r;
+			if( lightcos > 0.0f )
+				illum -= job->shadelight * lightcos;
+		}
+
+		illum = Q_max( illum, 0.0f );
+	}
+
+	illum = Q_min( illum, 255.0f );
+
+	*lv = LightToTexGamma( illum * 4 ) / 1023.0f;
+}
+
+static void R_StudioJobLightLambert( const studiojob_t *job, vec4_t light[MAX_LOCALLIGHTS], const vec3_t normal, const vec3_t color, byte *out )
+{
+	vec3_t finalLight = { 0, 0, 0 };
+
+	if( !job->numlocallights )
+	{
+		VectorScale( color, 255.0f, out );
+		return;
+	}
+
+	for( int i = 0; i < job->numlocallights; i++ )
+	{
+		float r;
+
+		r = DotProduct( normal, light[i] );
+		if( likely( !job->flipviewmodel ))
+			r = -r;
+
+		if( r > 0.0f )
+		{
+			vec3_t localLight;
+			float  temp;
+
+			if( light[i][3] == 0.0f )
+			{
+				float r2 = DotProduct( light[i], light[i] );
+
+				if( r2 > 0.0f )
+					light[i][3] = job->locallightR2[i] / ( r2 * sqrt( r2 ));
+				else
+					light[i][3] = 0.0001f;
+			}
+
+			temp = r * light[i][3];
+
+			VectorAddScalar( job->locallightcolor[i], temp, localLight );
+			VectorAdd( finalLight, localLight, finalLight );
+		}
+	}
+
+	if( !VectorIsNull( finalLight ))
+	{
+		for( int i = 0; i < 3; i++ )
+		{
+			float c = finalLight[i] + LinearGammaTable( color[i] * 1023.0f );
+
+			if( c > 1023.0f )
+				out[i] = 255;
+			else
+				out[i] = ScreenGammaTable( c ) >> 2;
+		}
+	}
+	else
+	{
+		VectorScale( color, 255.0f, out );
+	}
+}
+
+// R_SetupFinalVert with the job's copy of the transform
+static void R_StudioJobFinalVert( const studiojob_t *job, finalvert_t *fv, const float *v )
+{
+	fv->xyz[0] = DotProduct( v, job->aliastransform[0] ) + job->aliastransform[0][3];
+	fv->xyz[1] = DotProduct( v, job->aliastransform[1] ) + job->aliastransform[1][3];
+	fv->xyz[2] = DotProduct( v, job->aliastransform[2] ) + job->aliastransform[2][3];
+	fv->flags = 0;
+	fv->l = 0;
+	if( fv->xyz[2] < ALIAS_Z_CLIP_PLANE )
+		fv->flags |= ALIAS_Z_CLIP;
+	else
+		R_AliasProjectAndClipTestFinalVert( fv );
+	fv->s = 0;
+	fv->t = 0;
+}
+
+// R_StudioDrawNormalMeshFast with the job's buffers
+static void R_StudioJobDrawMesh( const studiojob_t *job, short *ptricmds, vec3_t *pstudionorms, float s, float t )
+{
+	const skincoordtable_t *stab = R_StudioSkinCoordTable( s, r_affinetridesc.skinwidth );
+	const skincoordtable_t *ttab = R_StudioSkinCoordTable( t, r_affinetridesc.skinheight );
+	finalvert_t triv[3];
+	int         i;
+
+	while(( i = *( ptricmds++ )))
+	{
+		qboolean fan = i < 0;
+		int      vertcount = 0, n = 0;
+
+		if( fan )
+			i = -i;
+
+		for( ; i > 0; i--, ptricmds += 4 )
+		{
+			int         idx = ptricmds[0];
+			finalvert_t *fv;
+			rgba_t      color;
+			uint        light;
+
+			if( job->numlocallights )
+			{
+				R_StudioJobLightLambert( job, job->lightpos[idx], pstudionorms[ptricmds[1]], job->lightvalues[ptricmds[1]], color );
+				light = (( color[0] + color[1] + color[2] ) * 2656 ) >> 16; // * 31 / ( 3 * 255 )
+				if( light > 31 )
+					light = 31;
+			}
+			else
+				light = job->normlight[ptricmds[1]];
+
+			fv = fan ? &triv[vertcount] : &triv[n];
+			*fv = job->fverts[idx];
+			fv->l = light << 8;
+			fv->s = R_StudioSkinCoordFrom( stab, ptricmds[2] ) << 16;
+			fv->t = R_StudioSkinCoordFrom( ttab, ptricmds[3] ) << 16;
+
+			if( fan )
+			{
+				vertcount++;
+				if( vertcount >= 3 )
+				{
+					R_RenderTriangle( &triv[0], &triv[1], &triv[2] );
+					triv[1] = triv[2];
+					vertcount = 2;
+				}
+			}
+			else
+			{
+				n++;
+				vertcount++;
+				if( n == 3 )
+					n = 0;
+				if( vertcount >= 3 )
+				{
+					if( vertcount & 1 )
+						R_RenderTriangle( &triv[0], &triv[1], &triv[2] );
+					else
+						R_RenderTriangle( &triv[2], &triv[1], &triv[0] );
+				}
+			}
+		}
+	}
+}
+
+// R_StudioSetupChrome with the job's copy
+static void R_StudioJobSetupChrome( const studiojob_t *job, float *pchrome, int bone, vec3_t normal )
+{
+	float n;
+
+	if( sj_chromeage[bone] != sj_age )
+	{
+		vec3_t chromeupvec, chromerightvec, tmp;
+
+		VectorNegate( job->chrome_origin, tmp );
+		tmp[0] += job->lighttransform[bone][0][3];
+		tmp[1] += job->lighttransform[bone][1][3];
+		tmp[2] += job->lighttransform[bone][2][3];
+
+		VectorNormalize( tmp );
+		CrossProduct( tmp, job->vright, chromeupvec );
+		VectorNormalize( chromeupvec );
+		CrossProduct( chromeupvec, tmp, chromerightvec );
+		VectorNormalize( chromerightvec );
+
+		Matrix3x4_VectorIRotate( job->lighttransform[bone], chromeupvec, sj_chromeup[bone] );
+		Matrix3x4_VectorIRotate( job->lighttransform[bone], chromerightvec, sj_chromeright[bone] );
+
+		sj_chromeage[bone] = sj_age;
+	}
+
+	n = DotProduct( normal, sj_chromeright[bone] );
+	pchrome[0] = ( n + 1.0f ) * 32.0f;
+
+	n = DotProduct( normal, sj_chromeup[bone] );
+	pchrome[1] = ( n + 1.0f ) * 32.0f;
+}
+
+// TriTexCoord2f of one coordinate
+static int R_StudioJobTriCoord( float u, int size )
+{
+	double u1 = 0;
+
+	u = fmodf( u, 10 );
+	if( u < 1000 && u > -1000 )
+		u1 = u;
+	while( u1 < 0 )
+		u1 = u1 + 1;
+	while( u1 > 1 )
+		u1 = u1 - 1;
+	return (short)( size * bound( 0.01, u1, 0.99 ));
+}
+
+// R_StudioDrawChromeMesh without a glow shell, through the TriAPI as it does:
+// R_StudioSetColorBegin, TriColor4ub, TriTexCoord2f and TriVertex3fv for kRenderNormal
+static void R_StudioJobDrawChromeMesh( const studiojob_t *job, short *ptricmds, vec3_t *pstudionorms, float s, float t )
+{
+	finalvert_t triv[3];
+	int         i;
+
+	while(( i = *( ptricmds++ )))
+	{
+		qboolean fan = i < 0;
+		int      vertcount = 0, n = 0;
+
+		if( fan )
+			i = -i;
+
+		for( ; i > 0; i--, ptricmds += 4 )
+		{
+			int         idx = ptricmds[1];
+			finalvert_t *fv = fan ? &triv[vertcount] : &triv[n];
+			rgba_t      color;
+			float       rr, gg, bb;
+			uint        light;
+
+			R_StudioJobLightLambert( job, job->lightpos ? job->lightpos[ptricmds[0]] : NULL, pstudionorms[ptricmds[1]], job->lightvalues[ptricmds[1]], color );
+			rr = color[0] * ( 1.0f / 255.0f );
+			gg = color[1] * ( 1.0f / 255.0f );
+			bb = color[2] * ( 1.0f / 255.0f );
+			light = ( rr + gg + bb ) * 31 / 3;
+			if( light > 31 )
+				light = 31;
+
+			*fv = job->fverts[ptricmds[0]];
+			fv->l = light << 8;
+			fv->s = R_StudioJobTriCoord( job->chrome[idx][0] * s, r_affinetridesc.skinwidth ) << 16;
+			fv->t = R_StudioJobTriCoord( job->chrome[idx][1] * t, r_affinetridesc.skinheight ) << 16;
+
+			if( fan )
+			{
+				vertcount++;
+				if( vertcount >= 3 )
+				{
+					R_RenderTriangle( &triv[0], &triv[1], &triv[2] );
+					triv[1] = triv[2];
+					vertcount = 2;
+				}
+			}
+			else
+			{
+				n++;
+				vertcount++;
+				if( n == 3 )
+					n = 0;
+				if( vertcount >= 3 )
+				{
+					if( vertcount & 1 )
+						R_RenderTriangle( &triv[0], &triv[1], &triv[2] );
+					else
+						R_RenderTriangle( &triv[2], &triv[1], &triv[0] );
+				}
+			}
+		}
+	}
+}
+
+// R_StudioDrawPoints for what R_StudioDrawPointsAsJob() lets through: the vertices
+static void R_StudioJobVertices( studiojob_t *job )
+{
+	studiohdr_t    *hdr = job->hdr;
+	mstudiomodel_t *sub = job->submodel;
+	byte           *pvertbone = (byte *)hdr + sub->vertinfoindex;
+	byte           *pnormbone = (byte *)hdr + sub->norminfoindex;
+	mstudiomesh_t  *pmesh = (mstudiomesh_t *)((byte *)hdr + sub->meshindex );
+	vec3_t         *pstudioverts = (vec3_t *)((byte *)hdr + sub->vertindex );
+	vec3_t         *pstudionorms = (vec3_t *)((byte *)hdr + sub->normindex );
+	qboolean       need_sort = false;
+	int            i, j, k;
+
+	sj_age++;
+	for( i = 0; i < sub->numverts; i++ )
+	{
+		vec3_t v;
+
+		Matrix3x4_VectorTransform( job->bones[pvertbone[i]], pstudioverts[i], v );
+		if( job->lightpos )
+			R_StudioJobLightStrength( job, pvertbone[i], pstudioverts[i], job->lightpos[i] );
+		R_StudioJobFinalVert( job, &job->fverts[i], v );
+	}
+
+	for( j = k = 0; j < sub->nummesh; j++ )
+	{
+		int flags = job->ptexture[job->pskinref[pmesh[j].skinref]].flags | job->forceflags;
+
+		job->meshes[j].flags = flags;
+		job->meshes[j].mesh = &pmesh[j];
+		if( FBitSet( flags, STUDIO_NF_MASKED | STUDIO_NF_ADDITIVE ))
+			need_sort = true;
+
+		for( i = 0; i < pmesh[j].numnorms; i++, k++, pstudionorms++, pnormbone++ )
+		{
+			float  lv;
+			vec3_t value;
+
+			R_StudioJobLighting( job, &lv, *pnormbone, flags, (float *)pstudionorms );
+			if( FBitSet( flags, STUDIO_NF_CHROME ))
+				R_StudioJobSetupChrome( job, job->chrome[k], *pnormbone, (float *)pstudionorms );
+			VectorScale( job->lightcolor, lv, value );
+			if( job->lightvalues )
+				VectorCopy( value, job->lightvalues[k] );
+			job->normlight[k] = R_StudioNormalLight( value );
+		}
+	}
+
+	if( job->sort && need_sort )
+		qsort( job->meshes, sub->nummesh, sizeof( sortedmesh_t ), (void *)R_StudioMeshCompare );
+}
+
+// and the triangles, on the helper
+static void R_StudioDrawPointsJob( const void *arg )
+{
+	studiojob_t    *job = *(studiojob_t *const *)arg;
+	studiohdr_t    *hdr = job->hdr;
+	mstudiomodel_t *sub = job->submodel;
+	vec3_t         *pstudionorms = (vec3_t *)((byte *)hdr + sub->normindex );
+	int            expect = 0, j;
+
+	if( __atomic_compare_exchange_n( &job->stage, &expect, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE ))
+	{
+		R_StudioJobVertices( job );
+		__atomic_store_n( &job->stage, 2, __ATOMIC_RELEASE );
+	}
+	else
+	{
+		while( __atomic_load_n( &job->stage, __ATOMIC_ACQUIRE ) != 2 )
+			; // the other thread is at them
+	}
+
+	d_pdrawspans = R_PolysetFillSpans8;
+
+	for( j = 0; j < sub->nummesh; j++ )
+	{
+		sortedmesh_t     *m = &job->meshes[j];
+		mstudiotexture_t *ptex = &job->ptexture[job->pskinref[m->mesh->skinref]];
+		image_t          *image;
+
+		// R_StudioSetupSkin and GL_Bind for kRenderNormal
+		image = R_GetTexture( job->whiteskin ? job->whiteskin : job->pskintex[job->pskinref[m->mesh->skinref]].index );
+		r_affinetridesc.pskin = image->pixels[0];
+		r_affinetridesc.skinwidth = image->width;
+		r_affinetridesc.skinheight = image->height;
+
+		if( FBitSet( m->flags, STUDIO_NF_CHROME ))
+			R_StudioJobDrawChromeMesh( job, (short *)((byte *)hdr + m->mesh->triindex ), pstudionorms, 1.0f / (float)ptex->width, 1.0f / (float)ptex->height );
+		else
+			R_StudioJobDrawMesh( job, (short *)((byte *)hdr + m->mesh->triindex ), pstudionorms, 1.0f / (float)ptex->width, 1.0f / (float)ptex->height );
+	}
+}
+
+/*
+===============
+R_StudioDrawPointsAsJob
+
+The submodel as a job, if it is one R_StudioDrawPointsJob draws as
+R_StudioDrawPoints would: opaque, R_StudioDrawNormalMeshFast's meshes only.
+===============
+*/
+static qboolean R_StudioDrawPointsAsJob( void )
+{
+	cl_entity_t      *e = RI.currententity;
+	mstudiotexture_t *ptexture = (mstudiotexture_t *)((byte *)m_pStudioHeader + m_pStudioHeader->textureindex );
+	mstudiomesh_t    *pmesh = (mstudiomesh_t *)((byte *)m_pStudioHeader + m_pSubModel->meshindex );
+	short            *pskinref = (short *)((byte *)m_pStudioHeader + m_pStudioHeader->skinindex );
+	int              numbones = m_pStudioHeader->numbones;
+	int              skinnum = e->curstate.skin;
+	size_t           size;
+	studiojob_t      *job;
+	qboolean         chrome = false;
+	int              numverts = m_pSubModel->numverts, numnorms = 0;
+	int              i;
+
+	if( !studio_jobs || vid.rendermode != kRenderNormal || vid.is2d
+	 || e->curstate.rendermode == kRenderTransAdd || e->curstate.renderfx == kRenderFxGlowShell
+	 || FBitSet( m_pStudioHeader->flags, STUDIO_HAS_BONEWEIGHTS ) || FBitSet( g_nForceFaceFlags, STUDIO_NF_CHROME )
+	 || numbones <= 0 || numbones > MAXSTUDIOBONES )
+		return false;
+
+	if( skinnum > 0 && skinnum < m_pStudioHeader->numskinfamilies )
+		pskinref += ( skinnum * m_pStudioHeader->numskinref );
+
+	for( i = 0; i < m_pSubModel->nummesh; i++ )
+	{
+		int flags = ptexture[pskinref[pmesh[i].skinref]].flags | g_nForceFaceFlags;
+
+		if( FBitSet( flags, STUDIO_NF_UV_COORDS ))
+			return false;
+		if( FBitSet( flags, STUDIO_NF_CHROME ))
+			chrome = true;
+		numnorms += pmesh[i].numnorms;
+	}
+
+	if( numverts > MAXSTUDIOVERTS || numnorms > MAXSTUDIOVERTS )
+		return false;
+
+	// the job and its buffers, each 16-byte aligned
+#define SJ_SIZE( n, type ) ((( n ) * sizeof( type ) + 15 ) & ~15 )
+	size = SJ_SIZE( 1, studiojob_t ) + SJ_SIZE( numbones, matrix3x4 ) + SJ_SIZE( numbones, vec3_t )
+		+ SJ_SIZE( numverts, finalvert_t ) + SJ_SIZE( numnorms, uint ) + SJ_SIZE( m_pSubModel->nummesh, sortedmesh_t );
+	if( g_studio.numlocallights || chrome )
+		size += SJ_SIZE( numbones, matrix3x4 ) + SJ_SIZE( numnorms, vec3_t );
+	if( g_studio.numlocallights )
+		size += SJ_SIZE( numverts, vec4_t[MAX_LOCALLIGHTS] );
+	if( chrome )
+		size += SJ_SIZE( numnorms, vec2_t );
+	job = R_StudioJobAlloc( size );
+	{
+		byte *p = (byte *)job + SJ_SIZE( 1, studiojob_t );
+
+#define SJ_TAKE( field, n, type ) ( job->field = (void *)p, p += SJ_SIZE( n, type ))
+		SJ_TAKE( bones, numbones, matrix3x4 );
+		SJ_TAKE( blightvec, numbones, vec3_t );
+		SJ_TAKE( fverts, numverts, finalvert_t );
+		SJ_TAKE( normlight, numnorms, uint );
+		SJ_TAKE( meshes, m_pSubModel->nummesh, sortedmesh_t );
+		job->lighttransform = NULL;
+		job->lightvalues = NULL;
+		job->lightpos = NULL;
+		job->chrome = NULL;
+		if( g_studio.numlocallights || chrome )
+		{
+			SJ_TAKE( lighttransform, numbones, matrix3x4 );
+			SJ_TAKE( lightvalues, numnorms, vec3_t );
+		}
+		if( g_studio.numlocallights )
+			SJ_TAKE( lightpos, numverts, vec4_t[MAX_LOCALLIGHTS] );
+		if( chrome )
+			SJ_TAKE( chrome, numnorms, vec2_t );
+#undef SJ_TAKE
+#undef SJ_SIZE
+	}
+	memcpy( job->bones, g_studio.bonestransform, numbones * sizeof( matrix3x4 ));
+	memcpy( job->blightvec, g_studio.blightvec, numbones * sizeof( vec3_t ));
+	if( job->lighttransform )
+		memcpy( job->lighttransform, g_studio.lighttransform, numbones * sizeof( matrix3x4 ));
+	job->numnorms = numnorms;
+	job->stage = 0;
+
+	job->hdr = m_pStudioHeader;
+	job->submodel = m_pSubModel;
+	job->ptexture = ptexture;
+	job->pskintex = NULL;
+	if( m_fDoRemap )
+		job->pskintex = gEngfuncs.CL_GetRemapInfoForEntity( e )->ptexture;
+	if( !job->pskintex )
+		job->pskintex = ptexture;
+	job->pskinref = pskinref;
+	job->forceflags = g_nForceFaceFlags;
+	job->whiteskin = ( r_lightmap->value && !r_fullbright->value ) ? tr.whiteTexture : 0;
+	job->sort = r_studio_sort_textures.value != 0.0f;
+	job->flipviewmodel = tr.fFlipViewModel;
+	job->ambientlight = g_studio.ambientlight;
+	job->shadelight = g_studio.shadelight;
+	VectorCopy( g_studio.lightcolor, job->lightcolor );
+	job->numlocallights = g_studio.numlocallights;
+	for( i = 0; i < g_studio.numlocallights; i++ )
+	{
+		VectorCopy( g_studio.locallight[i]->origin, job->locallightorigin[i] );
+		VectorCopy( g_studio.locallightcolor[i], job->locallightcolor[i] );
+		job->locallightR2[i] = g_studio.locallightR2[i];
+	}
+	R_GetAliasTransform( job->aliastransform );
+	VectorCopy( g_studio.chrome_origin, job->chrome_origin );
+	VectorCopy( RI.vright, job->vright );
+
+	for( i = 0; i < m_pSubModel->nummesh; i++ )
+		r_stats.c_studio_polys += pmesh[i].numtris;
+
+	if( studio_numjobs < (int)ARRAYSIZE( studio_joblist ))
+		studio_joblist[studio_numjobs++] = job;
+	R_JobAdd( R_StudioDrawPointsJob, &job, sizeof( job ));
+	return true;
+}
+#endif // MISTER_HYBRID
+
 /*
 ===============
 R_StudioDrawPoints
@@ -1928,6 +2697,12 @@ static void R_StudioDrawPoints( void )
 
 	if( !m_pStudioHeader )
 		return;
+
+#ifdef MISTER_HYBRID
+	if( R_StudioDrawPointsAsJob( ))
+		return;
+	R_StudioJobsSync();
+#endif
 
 	m_skinnum = RI.currententity->curstate.skin;
 	ptexture = (mstudiotexture_t *)((byte *)m_pStudioHeader + m_pStudioHeader->textureindex );
@@ -2000,6 +2775,7 @@ static void R_StudioDrawPoints( void )
 				if( FBitSet( g_nFaceFlags, STUDIO_NF_CHROME ))
 					R_StudioSetupChrome( g_studio.chrome[k], *pnormbone, (float *)pstudionorms );
 				VectorSet( g_studio.lightvalues[k], tr.blend, tr.blend, tr.blend );
+				g_normlight[k] = R_StudioNormalLight( g_studio.lightvalues[k] );
 			}
 		}
 		else
@@ -2014,6 +2790,7 @@ static void R_StudioDrawPoints( void )
 				if( FBitSet( g_nFaceFlags, STUDIO_NF_CHROME ))
 					R_StudioSetupChrome( g_studio.chrome[k], *pnormbone, (float *)pstudionorms );
 				VectorScale( g_studio.lightcolor, lv_tmp, g_studio.lightvalues[k] );
+				g_normlight[k] = R_StudioNormalLight( g_studio.lightvalues[k] );
 			}
 		}
 	}

@@ -30,8 +30,9 @@ ENTITY AREA CHECKING
 ===============================================================================
 */
 #define MAX_TOTAL_ENT_LEAFS		128
-#define AREA_NODES			32
-#define AREA_DEPTH			4
+// 64 areas instead of the 16 of Quake: a trace looks at fewer entities
+#define AREA_NODES			128
+#define AREA_DEPTH			6
 
 #include "lightstyle.h"
 

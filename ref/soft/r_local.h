@@ -930,6 +930,13 @@ void R_JobsBegin( void );
 void R_JobAdd( rjob_t fn, const void *arg, size_t size );
 void R_JobsDrain( void );
 void R_JobsFinish( void );
+qboolean R_JobsAvailable( void );
+void R_JobsOrdered( qboolean ordered );
+
+// r_studio.c: opaque studio models drawn as jobs on the helper, in order
+void R_StudioJobsBegin( void );
+void R_StudioJobsSync( void );
+void R_StudioJobsEnd( void );
 
 extern int     cachewidth;
 extern pixel_t *cacheblock;
@@ -1088,6 +1095,8 @@ int CL_FxBlend( cl_entity_t *e );
 
 
 void R_SetUpWorldTransform( void );
+void R_AliasProjectAndClipTestFinalVert( finalvert_t *fv );
+void R_GetAliasTransform( float out[3][4] );
 
 #define BLEND_ALPHA_LOW( alpha, src, screen ) ( vid.alphamap[(( alpha ) << 18 ) | ((( src ) & 0xff00 ) << 2 ) | (( screen ) >> 6 )] | (( screen ) & 0x3f ))
 #define BLEND_ALPHA( alpha, src, dst )        ( alpha ) > 3 ? BLEND_ALPHA_LOW( 7 - 1 - ( alpha ), ( dst ), ( src )) : BLEND_ALPHA_LOW(( alpha ) - 1, ( src ), ( dst ))

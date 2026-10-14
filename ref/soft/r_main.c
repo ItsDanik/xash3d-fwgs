@@ -510,6 +510,10 @@ static void R_DrawEntitiesOnList( void )
 	// RI.currententity = CL_GetEntityByIndex(0);
 	d_pdrawspans = R_PolysetFillSpans8;
 	GL_SetRenderMode( kRenderNormal );
+#ifdef MISTER_HYBRID
+	// opaque models are drawn on the helper meanwhile, everything else waits for them
+	R_StudioJobsBegin();
+#endif
 	// first draw solid entities
 	for( int i = 0; i < tr.draw_list->num_solid_entities && !FBitSet( RI.rvp.flags, RF_ONLY_CLIENTDRAW ); i++ )
 	{
@@ -526,6 +530,9 @@ static void R_DrawEntitiesOnList( void )
 		switch( RI.currentmodel->type )
 		{
 		case mod_brush:
+#ifdef MISTER_HYBRID
+			R_StudioJobsSync();
+#endif
 			R_DrawBrushModel( RI.currententity );
 			break;
 		case mod_alias:
@@ -539,6 +546,9 @@ static void R_DrawEntitiesOnList( void )
 			break;
 		}
 	}
+#ifdef MISTER_HYBRID
+	R_StudioJobsEnd();
+#endif
 
 	R_SetUpWorldTransform();
 	// draw sprites seperately, because of alpha blending

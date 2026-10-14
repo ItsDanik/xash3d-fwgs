@@ -863,6 +863,29 @@ static qboolean SV_CanBlock( edict_t *ent )
 	return true;
 }
 
+#ifdef MISTER_HYBRID
+/*
+============
+SV_PushMissesEntity
+
+An entity that neither stands on the pusher nor touches the box it moves into
+is not pushed, whatever SV_TestEntityPosition says: ask this first, the test
+is a whole trace through the world and everything near it, for every entity
+of the map, every frame a pusher moves (a conveyor belt or a lift). Not for
+clients, the test sets their size first.
+============
+*/
+static qboolean SV_PushMissesEntity( edict_t *check, edict_t *pusher, const vec3_t mins, const vec3_t maxs )
+{
+	if( FBitSet( check->v.flags, FL_CLIENT|FL_FAKECLIENT ))
+		return false;
+	if( FBitSet( check->v.flags, FL_ONGROUND ) && check->v.groundentity == pusher )
+		return false;
+	return check->v.absmin[0] >= maxs[0] || check->v.absmin[1] >= maxs[1] || check->v.absmin[2] >= maxs[2]
+		|| check->v.absmax[0] <= mins[0] || check->v.absmax[1] <= mins[1] || check->v.absmax[2] <= mins[2];
+}
+#endif
+
 /*
 ============
 SV_PushMove
@@ -916,6 +939,10 @@ static edict_t *SV_PushMove( edict_t *pusher, float movetime )
 		// filter movetypes to collide with
 		if( !SV_CanPushed( check ))
 			continue;
+#ifdef MISTER_HYBRID
+		if( SV_PushMissesEntity( check, pusher, mins, maxs ))
+			continue;
+#endif
 
 		pusher->v.solid = SOLID_NOT;
 		block = SV_TestEntityPosition( check, pusher );
@@ -1035,6 +1062,10 @@ static edict_t *SV_PushRotate( edict_t *pusher, float movetime )
 		// filter movetypes to collide with
 		if( !SV_CanPushed( check ))
 			continue;
+#ifdef MISTER_HYBRID
+		if( SV_PushMissesEntity( check, pusher, pusher->v.absmin, pusher->v.absmax ))
+			continue;
+#endif
 
 		pusher->v.solid = SOLID_NOT;
 		block = SV_TestEntityPosition( check, pusher );

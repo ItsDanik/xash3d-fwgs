@@ -409,6 +409,14 @@ static int	iTouchLinkSemaphore = 0;	// prevent recursion when SV_TouchLinks is a
 areanode_t	sv_areanodes[AREA_NODES];
 static int	sv_numareanodes;
 
+// The brush entities of each node's solid_edicts, in the same order, for
+// SV_WaterLinks: only a brush can be water, and walking every monster and item
+// for the few there are was a millisecond of a busy map's frame. A list of its
+// own, beside areanode_t, which mods see (physint.h). An entity is here from
+// SV_LinkEdict to SV_UnlinkEdict, as in the node's list.
+static link_t	sv_brushnodes[AREA_NODES];
+static link_t	sv_brushlinks[MAX_EDICTS];
+
 /*
 ===============
 SV_CreateAreaNode
@@ -426,6 +434,7 @@ static areanode_t *SV_CreateAreaNode( int depth, vec3_t mins, vec3_t maxs )
 	ClearLink( &anode->trigger_edicts );
 	ClearLink( &anode->solid_edicts );
 	ClearLink( &anode->portal_edicts );
+	ClearLink( &sv_brushnodes[anode - sv_areanodes] );
 
 	if( depth == AREA_DEPTH )
 	{
@@ -470,6 +479,7 @@ void SV_ClearWorld( void )
 	}
 
 	memset( sv_areanodes, 0, sizeof( sv_areanodes ));
+	memset( sv_brushlinks, 0, sizeof( sv_brushlinks ));
 	iTouchLinkSemaphore = 0;
 	sv_numareanodes = 0;
 
@@ -489,6 +499,13 @@ void SV_UnlinkEdict( edict_t *ent )
 	RemoveLink( &ent->area );
 	ent->area.prev = NULL;
 	ent->area.next = NULL;
+
+	link_t *brush = &sv_brushlinks[NUM_FOR_EDICT( ent )];
+	if( brush->prev )
+	{
+		RemoveLink( brush );
+		brush->prev = brush->next = NULL;
+	}
 }
 
 /*
@@ -682,7 +699,14 @@ void GAME_EXPORT SV_LinkEdict( edict_t *ent, qboolean touch_triggers )
 		InsertLinkBefore( &ent->area, &node->trigger_edicts );
 	else if( ent->v.solid == SOLID_PORTAL )
 		InsertLinkBefore( &ent->area, &node->portal_edicts );
-	else InsertLinkBefore( &ent->area, &node->solid_edicts );
+	else
+	{
+		model_t *mod = SV_ModelHandle( ent->v.modelindex );
+
+		InsertLinkBefore( &ent->area, &node->solid_edicts );
+		if( mod && mod->type == mod_brush )
+			InsertLinkBefore( &sv_brushlinks[NUM_FOR_EDICT( ent )], &sv_brushnodes[node - sv_areanodes] );
+	}
 
 	if( touch_triggers && !iTouchLinkSemaphore )
 	{
@@ -701,10 +725,10 @@ POINT TESTING IN HULLS
 */
 static void SV_WaterLinks( const vec3_t origin, int *pCont, areanode_t *node )
 {
-	link_t	*l, *next;
+	link_t	*l, *next, *list = &sv_brushnodes[node - sv_areanodes];
 
 	// get water edicts
-	for( l = node->solid_edicts.next; l != &node->solid_edicts; l = next )
+	for( l = list->next; l != list; l = next )
 	{
 		edict_t	*touch;
 		hull_t	*hull;
@@ -712,7 +736,7 @@ static void SV_WaterLinks( const vec3_t origin, int *pCont, areanode_t *node )
 		model_t	*mod;
 
 		next = l->next;
-		touch = EDICT_FROM_AREA( l );
+		touch = svgame.edicts + ( l - sv_brushlinks );
 
 		if( touch->v.solid != SOLID_NOT ) // disabled ?
 			continue;
@@ -1092,6 +1116,12 @@ static qboolean SV_ClipToEntity( edict_t *touch, moveclip_t *clip )
 {
 	trace_t	trace;
 	model_t	*mod;
+
+	// nearly everything in the lists is nowhere near the move, and a monster
+	// that thinks traces hundreds of times a frame: ask this first, the
+	// other reasons to leave an entity out cost more
+	if( !BoundsIntersect( clip->boxmins, clip->boxmaxs, touch->v.absmin, touch->v.absmax ))
+		return true;
 
 	if( SV_IsValidEdict( clip->passedict ) && !SV_CheckGroupTrace( touch, clip->passedict ))
 		return true;

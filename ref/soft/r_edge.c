@@ -569,6 +569,411 @@ void R_GenerateSpansBackward( void )
 }
 
 
+
+#ifdef MISTER_HYBRID
+/*
+===============================================================================
+
+THE LOWER ROWS ON THE HELPER THREAD
+
+R_ScanEdges is one thread's work, a tenth of the frame on the MiSTer. The
+spans of a row depend on the edges that are active in it and nothing else, so
+the rows from hscan.first down are made by the helper thread while this one
+makes the rest, into a span buffer and a surface stack of its own, and joined
+to the surfaces' lists before they are drawn.
+
+The active edge table of a row comes from all the rows above it (the order of
+edges at the same u is that history), so the helper steps a copy of the edges
+through the upper rows first, without making spans: the same table, exactly.
+If its spans do not fit in its buffer, this thread scans the lower rows as
+well, as before.
+
+===============================================================================
+*/
+extern qboolean alphaspans;
+
+typedef struct hsurf_s
+{
+	struct hsurf_s *next, *prev;
+	espan_t        *spans, *last; // last: the end of the list
+	int            key, last_u, spanstate;
+	qboolean       insubmodel;
+	float          d_ziorigin, d_zistepu, d_zistepv;
+} hsurf_t;
+
+static struct
+{
+	edge_t   *edges;     // copy of r_edges .. edge_p
+	int      edgescap;
+	ptrdiff_t delta;     // bytes from an edge to its copy
+	edge_t   *orig, *orig_end;
+	hsurf_t  *surfs;     // [1] .. [numsurfs - 1] are surfaces[1] ..
+	int      surfscap, numsurfs;
+	espan_t  spans[MAXSPANS];
+	espan_t  *span_p, *max_span_p;
+	int      first;      // the first row the helper makes spans of
+	int      bottom;     // RI.vrectbottom - 1
+	int      iv;
+	float    fv;
+	edge_t   head, tail, aftertail, sentinel;
+	int      head_u_shift20, tail_u_shift20;
+	int      done;       // 1: spans made, -1: they did not fit
+	int      split;      // where the next frame splits, moved towards an even share
+} hscan;
+
+static inline edge_t *R_HScanEdge( edge_t *e )
+{
+	if( e >= hscan.orig && e < hscan.orig_end )
+		return (edge_t *)((byte *)e + hscan.delta );
+	return e;
+}
+
+static void R_HScanStepActiveU( edge_t *pedge )
+{
+	edge_t *pnext_edge, *pwedge;
+
+	while( 1 )
+	{
+		pedge->u += pedge->u_step;
+		if( pedge->u < pedge->prev->u )
+		{
+			if( pedge == &hscan.aftertail )
+				return;
+
+			// push it back to keep it sorted
+			pnext_edge = pedge->next;
+			pedge->next->prev = pedge->prev;
+			pedge->prev->next = pedge->next;
+			pwedge = pedge->prev->prev;
+			while( pwedge->u > pedge->u )
+				pwedge = pwedge->prev;
+			pedge->next = pwedge->next;
+			pedge->prev = pwedge;
+			pedge->next->prev = pedge;
+			pwedge->next = pedge;
+
+			pedge = pnext_edge;
+			if( pedge == &hscan.tail )
+				return;
+		}
+		else
+			pedge = pedge->next;
+	}
+}
+
+static inline void R_HScanSpan( hsurf_t *surf, int u, int count )
+{
+	espan_t *span = hscan.span_p++;
+
+	span->u = u;
+	span->count = count;
+	span->v = hscan.iv;
+	span->pnext = surf->spans;
+	if( !surf->spans )
+		surf->last = span;
+	surf->spans = span;
+}
+
+static void R_HScanTrailingEdge( hsurf_t *surf, edge_t *edge )
+{
+	if( --surf->spanstate == 0 )
+	{
+		if( surf == hscan.surfs[1].next )
+		{
+			int iu = edge->u >> 20;
+
+			if( iu > surf->last_u )
+				R_HScanSpan( surf, surf->last_u, iu - surf->last_u );
+			surf->next->last_u = iu;
+		}
+
+		surf->prev->next = surf->next;
+		surf->next->prev = surf->prev;
+	}
+}
+
+static void R_HScanLeadingEdge( edge_t *edge )
+{
+	hsurf_t *surf, *surf2;
+	int     iu;
+	float   fu, newzi, testzi, newzitop, newzibottom;
+
+	if( !edge->surfs[1] )
+		return;
+
+	surf = &hscan.surfs[edge->surfs[1]];
+	if( ++surf->spanstate != 1 )
+		return;
+
+	surf2 = hscan.surfs[1].next;
+
+	if( surf->key < surf2->key )
+		goto newtop;
+
+	if( surf->insubmodel && ( surf->key == surf2->key ))
+	{
+		fu = (float)( edge->u - 0xFFFFF ) * ( 1.0f / 0x100000 );
+		newzi = surf->d_ziorigin + hscan.fv * surf->d_zistepv + fu * surf->d_zistepu;
+		newzibottom = newzi * 0.99f;
+		testzi = surf2->d_ziorigin + hscan.fv * surf2->d_zistepv + fu * surf2->d_zistepu;
+
+		if( newzibottom >= testzi )
+			goto newtop;
+
+		newzitop = newzi * 1.01f;
+		if( newzitop >= testzi )
+		{
+			if( surf->d_zistepu >= surf2->d_zistepu )
+				goto newtop;
+		}
+	}
+
+continue_search:
+	do
+	{
+		surf2 = surf2->next;
+	}
+	while( surf->key > surf2->key );
+
+	if( surf->key == surf2->key )
+	{
+		if( !surf->insubmodel )
+			goto continue_search;
+
+		fu = (float)( edge->u - 0xFFFFF ) * ( 1.0f / 0x100000 );
+		newzi = surf->d_ziorigin + hscan.fv * surf->d_zistepv + fu * surf->d_zistepu;
+		newzibottom = newzi * 0.99f;
+		testzi = surf2->d_ziorigin + hscan.fv * surf2->d_zistepv + fu * surf2->d_zistepu;
+
+		if( newzibottom >= testzi )
+			goto gotposition;
+
+		newzitop = newzi * 1.01f;
+		if( newzitop >= testzi )
+		{
+			if( surf->d_zistepu >= surf2->d_zistepu )
+				goto gotposition;
+		}
+
+		goto continue_search;
+	}
+
+	goto gotposition;
+
+newtop:
+	iu = edge->u >> 20;
+	if( iu > surf2->last_u )
+		R_HScanSpan( surf2, surf2->last_u, iu - surf2->last_u );
+	surf->last_u = iu;
+
+gotposition:
+	surf->next = surf2;
+	surf->prev = surf2->prev;
+	surf2->prev->next = surf;
+	surf2->prev = surf;
+}
+
+static void R_HScanGenerateSpans( void )
+{
+	hsurf_t *surf;
+
+	hscan.surfs[1].next = hscan.surfs[1].prev = &hscan.surfs[1];
+	hscan.surfs[1].last_u = hscan.head_u_shift20;
+
+	for( edge_t *edge = hscan.head.next; edge != &hscan.tail; edge = edge->next )
+	{
+		if( edge->surfs[0] )
+		{
+			R_HScanTrailingEdge( &hscan.surfs[edge->surfs[0]], edge );
+			if( !edge->surfs[1] )
+				continue;
+		}
+		R_HScanLeadingEdge( edge );
+	}
+
+	// R_CleanupSpan
+	surf = hscan.surfs[1].next;
+	if( hscan.tail_u_shift20 > surf->last_u )
+		R_HScanSpan( surf, surf->last_u, hscan.tail_u_shift20 - surf->last_u );
+	do
+	{
+		surf->spanstate = 0;
+		surf = surf->next;
+	}
+	while( surf != &hscan.surfs[1] );
+}
+
+static void R_HScanJob( const void *unused )
+{
+	int iv;
+
+	// the copy's links into the edges are links into the copy
+	for( int i = 0; i < hscan.orig_end - hscan.orig; i++ )
+	{
+		edge_t *e = &hscan.edges[i];
+
+		e->next = R_HScanEdge( e->next );
+		e->nextremove = R_HScanEdge( e->nextremove );
+	}
+
+	for( int i = 1; i < hscan.numsurfs; i++ )
+	{
+		const surf_t *s = &surfaces[i];
+		hsurf_t      *h = &hscan.surfs[i];
+
+		h->spans = NULL;
+		h->spanstate = 0;
+		h->key = s->key;
+		h->insubmodel = s->insubmodel;
+		h->d_ziorigin = s->d_ziorigin;
+		h->d_zistepu = s->d_zistepu;
+		h->d_zistepv = s->d_zistepv;
+	}
+
+	hscan.span_p = hscan.spans;
+	hscan.max_span_p = &hscan.spans[MAXSPANS - RI.vrect.width];
+
+	hscan.head.u = RI.vrect.x << 20;
+	hscan.head_u_shift20 = hscan.head.u >> 20;
+	hscan.head.u_step = 0;
+	hscan.head.prev = NULL;
+	hscan.head.next = &hscan.tail;
+	hscan.head.surfs[0] = 0;
+	hscan.head.surfs[1] = 1;
+	hscan.tail.u = ( RI.vrectright << 20 ) + 0xFFFFF;
+	hscan.tail_u_shift20 = hscan.tail.u >> 20;
+	hscan.tail.u_step = 0;
+	hscan.tail.prev = &hscan.head;
+	hscan.tail.next = &hscan.aftertail;
+	hscan.tail.surfs[0] = 1;
+	hscan.tail.surfs[1] = 0;
+	hscan.aftertail.u = -1;
+	hscan.aftertail.u_step = 0;
+	hscan.aftertail.next = &hscan.sentinel;
+	hscan.aftertail.prev = &hscan.tail;
+	hscan.sentinel.u = 2000 << 20;
+	hscan.sentinel.prev = &hscan.aftertail;
+
+	for( iv = 0; iv < hscan.bottom; iv++ )
+	{
+		if( newedges[iv] )
+			R_InsertNewEdges( R_HScanEdge( newedges[iv] ), hscan.head.next );
+
+		if( iv >= hscan.first )
+		{
+			hscan.iv = iv;
+			hscan.fv = (float)iv;
+			hscan.surfs[1].spanstate = 1;
+			R_HScanGenerateSpans();
+			if( hscan.span_p > hscan.max_span_p )
+			{
+				__atomic_store_n( &hscan.done, -1, __ATOMIC_RELEASE );
+				return;
+			}
+		}
+
+		if( removeedges[iv] )
+			R_RemoveEdges( R_HScanEdge( removeedges[iv] ));
+		if( hscan.head.next != &hscan.tail )
+			R_HScanStepActiveU( hscan.head.next );
+	}
+
+	if( newedges[iv] )
+		R_InsertNewEdges( R_HScanEdge( newedges[iv] ), hscan.head.next );
+	hscan.iv = iv;
+	hscan.fv = (float)iv;
+	hscan.surfs[1].spanstate = 1;
+	R_HScanGenerateSpans();
+
+	__atomic_store_n( &hscan.done, 1, __ATOMIC_RELEASE );
+}
+
+/*
+==============
+R_HScanBegin
+
+The row the helper starts at, 0 if it does not
+==============
+*/
+static int R_HScanBegin( int bottom )
+{
+	int numedges = edge_p - r_edges;
+	int numsurfs = surface_p - surfaces;
+
+	if( alphaspans || pdrawfunc != R_GenerateSpans || bottom < 32 || !R_JobsAvailable( ))
+		return 0;
+
+	if( hscan.edgescap < numedges )
+	{
+		free( hscan.edges );
+		hscan.edgescap = numedges + 1024;
+		hscan.edges = malloc( hscan.edgescap * sizeof( edge_t ));
+	}
+	if( hscan.surfscap < numsurfs )
+	{
+		free( hscan.surfs );
+		hscan.surfscap = numsurfs + 256;
+		hscan.surfs = malloc( hscan.surfscap * sizeof( hsurf_t ));
+	}
+	if( !hscan.edges || !hscan.surfs )
+	{
+		hscan.edgescap = hscan.surfscap = 0;
+		return 0;
+	}
+
+	if( !hscan.split || hscan.bottom != bottom )
+		hscan.split = bottom / 2;
+	hscan.split = bound( bottom / 4, hscan.split, bottom - bottom / 8 );
+
+	memcpy( hscan.edges, r_edges, numedges * sizeof( edge_t ));
+	hscan.delta = (byte *)hscan.edges - (byte *)r_edges;
+	hscan.orig = r_edges;
+	hscan.orig_end = edge_p;
+	hscan.numsurfs = numsurfs;
+	hscan.bottom = bottom;
+	hscan.first = hscan.split;
+	hscan.done = 0;
+
+	R_JobsBegin();
+	R_JobAdd( R_HScanJob, NULL, 0 );
+	return hscan.first;
+}
+
+/*
+==============
+R_HScanJoin
+
+At the first of the helper's rows: true if its spans are in the surfaces' lists
+now, false if this thread has to go on
+==============
+*/
+static qboolean R_HScanJoin( void )
+{
+	// the next frame gives the helper two rows more if it was done first, two less if not
+	if( __atomic_load_n( &hscan.done, __ATOMIC_ACQUIRE ) == 1 )
+		hscan.split -= 2;
+	else
+		hscan.split += 2;
+
+	R_JobsFinish();
+
+	if( hscan.done != 1 )
+		return false;
+
+	for( int i = 1; i < hscan.numsurfs; i++ )
+	{
+		hsurf_t *h = &hscan.surfs[i];
+
+		if( h->spans )
+		{
+			h->last->pnext = surfaces[i].spans;
+			surfaces[i].spans = h->spans;
+		}
+	}
+	return true;
+}
+#endif // MISTER_HYBRID
+
 /*
 ==============
 R_ScanEdges
@@ -623,9 +1028,23 @@ void R_ScanEdges( void )
 // process all scan lines
 //
 	int bottom = RI.vrectbottom - 1;
+#ifdef MISTER_HYBRID
+	int split = R_HScanBegin( bottom ); // the helper's rows, if not 0
+#endif
 
 	for( iv = 0; iv < bottom; iv++ )
 	{
+#ifdef MISTER_HYBRID
+		if( split && iv == split )
+		{
+			split = 0;
+			if( R_HScanJoin( ))
+			{
+				D_DrawSurfaces();
+				return;
+			}
+		}
+#endif
 		current_iv = iv;
 		fv = (float)iv;
 
@@ -642,6 +1061,11 @@ void R_ScanEdges( void )
 		// the next scan
 		if( span_p > max_span_p )
 		{
+#ifdef MISTER_HYBRID
+			// the helper is a job: done before the spans are
+			if( split )
+				R_JobsFinish();
+#endif
 			D_DrawSurfaces();
 
 			// clear the surface span pointers

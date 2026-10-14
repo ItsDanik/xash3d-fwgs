@@ -143,6 +143,12 @@ void R_AliasProjectAndClipTestFinalVert( finalvert_t *fv )
 		fv->flags |= ALIAS_BOTTOM_CLIP;
 }
 
+// for a job that draws on the helper thread while this one sets up the next model
+void R_GetAliasTransform( float out[3][4] )
+{
+	memcpy( out, aliastransform, sizeof( aliastransform ));
+}
+
 void R_SetupFinalVert( finalvert_t *fv, float x, float y, float z, int light, int s, int t )
 {
 	vec3_t v = {x, y, z};

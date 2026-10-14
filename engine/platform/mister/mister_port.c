@@ -37,20 +37,18 @@ int MiSTer_GameHeight(void)
     return MH_IsOpen() && MH_OSD_GAME_BITS(MH_OSDStatus(), 25, 1) ? 240 : 200;
 }
 
-// "O[27:26],Lock to 30 FPS,Off,On,Auto;": a frame every second field, an even
-// 30 a second where the renderer cannot keep up with every field. Auto does
-// that by itself (PaceAuto). MISTER_HYBRID_LOCK30=0|1|2 fixes it for a test.
-enum { LOCK30_OFF, LOCK30_ON, LOCK30_AUTO };
-
+// "O[26],Lock to 30 FPS,Off,On;": a frame every second field, an even 30 a
+// second where the renderer cannot keep up with every field. Off is still at
+// most one frame per field: 60. MISTER_HYBRID_LOCK30=0|1 fixes it for a test.
 static int Lock30(void)
 {
     static int fixed = -2;
-    int option;
 
     if (fixed == -2)
         fixed = getenv("MISTER_HYBRID_LOCK30") ? atoi(getenv("MISTER_HYBRID_LOCK30")) : -1;
-    option = fixed >= 0 ? fixed : MH_OSD_GAME_BITS(MH_OSDStatus(), 26, 2);
-    return option > LOCK30_AUTO ? LOCK30_OFF : option;
+    if (fixed >= 0)
+        return fixed != 0;
+    return MH_OSD_GAME_BITS(MH_OSDStatus(), 26, 1);
 }
 
 static uint32_t LastField;
@@ -209,63 +207,8 @@ void MiSTer_ResetFrames(void)
     FieldValid = 0;
 }
 
-// Lock to 30 FPS, Auto. A frame that is not ready for the next field is shown
-// a field late, and a game that makes 45 a second shows them 1, 2, 1, 1, 2...
-// fields apart: it stutters. So the choice is made for a while at a time:
-//   - every field, as long as the frames are ready for it
-//   - every second field, from when 6 of the last 60 frames were late until
-//     all but 3 of the last 120 frames were made with half a millisecond to spare
-//     in a single field
-#define PACE_WINDOW 60
-#define PACE_LATE 6
-#define PACE_CALM 120
-#define PACE_SLOW 3
-#define PACE_FAST_MS (MISTER_FIELD_TIME * 1e3 - 0.5)
-
-static int PaceLocked;
-static struct timespec PaceWorkStart;
-
-static int PaceAuto(unsigned fields, int low_res)
-{
-    static unsigned char flag[PACE_CALM]; // late frames, or slow ones while locked
-    static unsigned at, count, seen;
-    struct timespec now;
-    double work;
-
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    work = (now.tv_sec - PaceWorkStart.tv_sec) * 1e3 + (now.tv_nsec - PaceWorkStart.tv_nsec) * 1e-6;
-    // not the menu (interlaced, a frame is two fields anyway), not while loading
-    if (!low_res || fields == 0 || fields > 4) {
-        memset(flag, 0, sizeof(flag));
-        at = count = seen = 0;
-        return PaceLocked;
-    }
-    if (!PaceLocked) {
-        count -= flag[at];
-        flag[at] = fields > 1;
-        count += flag[at];
-        at = (at + 1) % PACE_WINDOW;
-        if (count < PACE_LATE)
-            return 0;
-        PaceLocked = 1;
-    } else {
-        count -= flag[at];
-        flag[at] = work >= PACE_FAST_MS;
-        count += flag[at];
-        at = (at + 1) % PACE_CALM;
-        if (++seen < PACE_CALM || count > PACE_SLOW)
-            return 1;
-        PaceLocked = 0;
-    }
-    // the other way from here, with nothing known yet
-    memset(flag, 0, sizeof(flag));
-    at = count = seen = 0;
-    return PaceLocked;
-}
-
 unsigned MiSTer_WaitFrame(void)
 {
-    static unsigned last_fields;
     uint32_t field;
     unsigned fields;
     int lock;
@@ -278,16 +221,12 @@ unsigned MiSTer_WaitFrame(void)
     }
     MiSTer_Mark(MISTER_T_WAIT);
     lock = Lock30();
-    if (lock == LOCK30_AUTO)
-        lock = PaceAuto(last_fields, MH_Height() <= 240);
     MH_WaitFrame(LastField);
     if (lock)
         MH_WaitField(LastField + 1); // not before the second field after the last frame
     field = MH_FieldCounter();
     fields = field - LastField; // 0: the core is gone
     LastField = field;
-    last_fields = fields;
-    clock_gettime(CLOCK_MONOTONIC, &PaceWorkStart);
     MiSTer_Mark(MISTER_T_OTHER);
     FpsLog(fields);
     return fields;
