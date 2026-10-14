@@ -979,6 +979,7 @@ static void R_DrawSurfaceDecals( void )
 		if( !tex->pixels[0] || s1 >= s2 || t1 >= t2 || !w )
 			continue;
 
+		transparent = false; // it was left as the decal before had it
 		if( tex->alpha_pixels )
 		{
 			buffer = tex->alpha_pixels;
@@ -1026,6 +1027,14 @@ static void R_DrawSurfaceDecals( void )
 					if( alpha <= 0 )
 						continue;
 
+#ifdef MISTER_HYBRID
+					// the blend tables cannot mix a dark decal into a light wall
+					// without red, green and purple fringes: at least half
+					// covered is the decal's pixel, less is the wall's
+					if( alpha < 4 )
+						continue;
+					alpha = 7;
+#endif
 					if( alpha < 7 )        // && (vid.rendermode == kRenderTransAlpha || vid.rendermode == kRenderTransTexture ) )
 					{
 						pixel_t screen = dest[u];         //  | 0xff & screen & src ;

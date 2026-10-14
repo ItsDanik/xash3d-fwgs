@@ -181,20 +181,58 @@ static void R_SetupDecalTextureSpaceBasis( decal_t *pDecal, msurface_t *surf, in
 }
 
 // Build the initial list of vertices from the surface verts into the global array, 'verts'.
-static void R_SetupDecalVertsForMSurface( decal_t *pDecal, msurface_t *surf, vec3_t textureSpaceBasis[3], float *verts )
+// The corners of a surface in model space, into verts (VERTEXSIZE apart).
+// This renderer builds no surf->polys (ref_gl does, for drawing): without
+// them every decal was dropped as not touching its surface, so none was ever
+// shown (sprays, bullet holes, blood). The outline from the model's edges
+// instead; the inline brush models share the world's edges and vertexes.
+// Returns the count, 0 if there is none or too many for the clipper.
+static int R_DecalSurfaceCorners( msurface_t *surf, float *verts )
 {
-	float *v;
-	int   i;
+	model_t *world = WORLDMODEL;
+	int     i;
 
-	if( !surf->polys )
-		return;
-	for( i = 0, v = surf->polys->verts[0]; i < surf->polys->numverts; i++, v += VERTEXSIZE, verts += VERTEXSIZE )
+	if( surf->polys )
 	{
-		VectorCopy( v, verts ); // copy model space coordinates
+		const float *v = surf->polys->verts[0];
+
+		if( surf->polys->numverts + 4 > MAX_DECALCLIPVERT )
+			return 0;
+		for( i = 0; i < surf->polys->numverts; i++, v += VERTEXSIZE )
+			VectorCopy( v, verts + i * VERTEXSIZE );
+		return surf->polys->numverts;
+	}
+
+	if( !world || surf < world->surfaces || surf >= world->surfaces + world->numsurfaces
+	 || surf->numedges < 3 || surf->numedges + 4 > MAX_DECALCLIPVERT )
+		return 0;
+
+	for( i = 0; i < surf->numedges; i++ )
+	{
+		int lindex = world->surfedges[surf->firstedge + i];
+		int vert;
+
+		if( FBitSet( world->flags, MODEL_QBSP2 ))
+			vert = lindex > 0 ? world->edges32[lindex].v[0] : world->edges32[-lindex].v[1];
+		else
+			vert = lindex > 0 ? world->edges16[lindex].v[0] : world->edges16[-lindex].v[1];
+		VectorCopy( world->vertexes[vert].position, verts + i * VERTEXSIZE );
+	}
+	return surf->numedges;
+}
+
+static int R_SetupDecalVertsForMSurface( decal_t *pDecal, msurface_t *surf, vec3_t textureSpaceBasis[3], float *verts )
+{
+	int count = R_DecalSurfaceCorners( surf, verts );
+	int i;
+
+	for( i = 0; i < count; i++, verts += VERTEXSIZE )
+	{
 		verts[3] = DotProduct( verts, textureSpaceBasis[0] ) - pDecal->dx + 0.5f;
 		verts[4] = DotProduct( verts, textureSpaceBasis[1] ) - pDecal->dy + 0.5f;
 		verts[5] = verts[6] = 0.0f;
 	}
+	return count;
 }
 
 // Figure out where the decal maps onto the surface.
@@ -362,11 +400,14 @@ static float *R_DecalVertsClip( decal_t *pDecal, msurface_t *surf, int texture, 
 	R_SetupDecalClip( pDecal, surf, texture, textureSpaceBasis, decalWorldScale );
 
 	// build the initial list of vertices from the surface verts.
-	R_SetupDecalVertsForMSurface( pDecal, surf, textureSpaceBasis, g_DecalClipVerts[0] );
+	int count = R_SetupDecalVertsForMSurface( pDecal, surf, textureSpaceBasis, g_DecalClipVerts[0] );
 
-	if( !surf->polys )
-		return 0;
-	return R_DoDecalSHClip( g_DecalClipVerts[0], pDecal, surf->polys->numverts, pVertCount );
+	if( !count )
+	{
+		*pVertCount = 0;
+		return NULL;
+	}
+	return R_DoDecalSHClip( g_DecalClipVerts[0], pDecal, count, pVertCount );
 }
 
 // Generate lighting coordinates at each vertex for decal vertices v[] on surface psurf

@@ -17,6 +17,9 @@ GNU General Public License for more details.
 #include "server.h"
 #include "net_encode.h"
 #include "platform/platform.h"
+#ifdef MISTER_HYBRID
+#include "platform/mister/mister_port.h"
+#endif
 
 // server cvars
 CVAR_DEFINE_AUTO( sv_lan, "0", 0, "server is a lan server ( no heartbeat, no authentication, no non-class C addresses, 9999.0 rate, etc." );
@@ -598,12 +601,69 @@ static qboolean SV_IsSimulating( void )
 SV_RunGameFrame
 =================
 */
+#ifdef MISTER_HYBRID
+/*
+=================
+SV_MiSTerCheats
+
+The OSD's Cheats page (core/Xash3D.sv). The switches decide: while one is on
+the player has it, through saved games and level changes, and when it is
+turned off it is gone (a god mode saved with a game as well). No Clip only
+while the player is alive. Give All Weapons is the game's "impulse 101",
+which the game's library allows with sv_cheats (read when it runs).
+=================
+*/
+static void SV_MiSTerCheats( void )
+{
+	static int last;
+	int        bits = MiSTer_Cheats();
+	int        changed = bits ^ last;
+	sv_client_t *cl = svs.clients;
+	edict_t    *ent;
+
+	if( sv.background || !cl || svs.maxclients != 1 || cl->state != cs_spawned || !SV_IsValidEdict( cl->edict ))
+		return; // the change is seen when there is a player
+	last = bits;
+	ent = cl->edict;
+	if( changed & ~MISTER_CHEAT_GIVE )
+		Con_Printf( "MiSTer cheats: god mode %s, no clip %s, invisible to monsters %s\n",
+			( bits & MISTER_CHEAT_GOD ) ? "on" : "off", ( bits & MISTER_CHEAT_NOCLIP ) ? "on" : "off",
+			( bits & MISTER_CHEAT_NOTARGET ) ? "on" : "off" );
+
+	if( FBitSet( bits, MISTER_CHEAT_GOD ))
+		SetBits( ent->v.flags, FL_GODMODE );
+	else ClearBits( ent->v.flags, FL_GODMODE );
+
+	if( FBitSet( bits, MISTER_CHEAT_NOTARGET ))
+		SetBits( ent->v.flags, FL_NOTARGET );
+	else ClearBits( ent->v.flags, FL_NOTARGET );
+
+	if( FBitSet( bits, MISTER_CHEAT_NOCLIP ))
+	{
+		if( ent->v.health > 0.0f && ent->v.deadflag == DEAD_NO )
+			ent->v.movetype = MOVETYPE_NOCLIP;
+	}
+	else if( ent->v.movetype == MOVETYPE_NOCLIP )
+		ent->v.movetype = MOVETYPE_WALK;
+
+	if( FBitSet( bits, MISTER_CHEAT_GIVE ) && FBitSet( changed, MISTER_CHEAT_GIVE ) && ent->v.health > 0.0f )
+	{
+		Cvar_Set( "sv_cheats", "1" );
+		Cbuf_AddText( "impulse 101\n" );
+	}
+}
+#endif
+
 static qboolean SV_RunGameFrame( void )
 {
 	sv.simulating = SV_IsSimulating();
 
 	if( !sv.simulating )
 		return true;
+
+#ifdef MISTER_HYBRID
+	SV_MiSTerCheats();
+#endif
 
 	if( sv_fps.value != 0.0f )
 	{

@@ -75,6 +75,13 @@ void MiSTer_Mark(int what);
 // Rows of the game's video mode, which is 320 wide: 200 or 240 (OSD option Resolution)
 int MiSTer_GameHeight(void);
 
+// The OSD's Cheats page: MISTER_CHEAT_* bits that are on
+#define MISTER_CHEAT_GOD      1 // God Mode
+#define MISTER_CHEAT_NOCLIP   2 // No Clip
+#define MISTER_CHEAT_NOTARGET 4 // Invisible to Monsters
+#define MISTER_CHEAT_GIVE     8 // Give All Weapons (a trigger, held 0.25s by the core)
+int MiSTer_Cheats(void);
+
 // Before the engine starts: finds the games that are installed next to the
 // binary (a folder with the game's liblist.gam and our libraries for it) and,
 // if there are several, lets the player pick one. Sets XASH3D_GAME. Returns 0

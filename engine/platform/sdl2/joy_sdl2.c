@@ -310,8 +310,9 @@ MiSTer_AddMappings
 
 The joysticks of the hybrid core (hybrid/sdl2): buttons 0..7 are the actions of
 the core's "J1" list, 8 and 9 its spare Menu OK and Menu Back, 28 and 29 the
-buttons the OSD's Menu OK / Menu Back options name. The d-pad is hat 0, the
-triggers rest at 0.
+buttons the OSD's Menu OK / Menu Back options name, 30 and 31 the stick clicks
+(read from Linux by the hybrid library, as the triggers). The d-pad is hat 0,
+the triggers rest at 0.
 =============
 */
 static void MiSTer_AddMappings( void )
@@ -329,7 +330,7 @@ static void MiSTer_AddMappings( void )
 		SDL_JoystickGetGUIDString( SDL_JoystickGetDeviceGUID( i ), guid, sizeof( guid ));
 		Q_snprintf( mapping, sizeof( mapping ), "%s,%s,"
 			"a:b0,b:b1,x:b2,y:b3,leftshoulder:b4,rightshoulder:b5,back:b6,start:b7,"
-			"paddle1:b8,paddle2:b9,paddle3:b28,paddle4:b29,"
+			"paddle1:b8,paddle2:b9,paddle3:b28,paddle4:b29,leftstick:b30,rightstick:b31,"
 			"dpup:h0.1,dpright:h0.2,dpdown:h0.4,dpleft:h0.8,"
 			"leftx:a0,lefty:a1,rightx:a2,righty:a3,lefttrigger:+a4,righttrigger:+a5,", guid, name );
 		if( SDL_GameControllerAddMapping( mapping ) < 0 )

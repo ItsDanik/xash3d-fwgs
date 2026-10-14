@@ -1498,7 +1498,15 @@ A 0 length will still generate a packet and deal with the reliable messages.
 */
 void Netchan_TransmitBits( netchan_t *chan, int length, const byte *data )
 {
+#ifdef MISTER_HYBRID
+	// zero, as the memset made it, and made zero again after each packet
+	// where it was written: a packet is a few hundred bytes, the buffer
+	// 192KB, and its memset twice a frame (client and server) was 2% of
+	// the game's time
+	static byte	send_buf[NET_MAX_MESSAGE];
+#else
 	byte	send_buf[NET_MAX_MESSAGE];
+#endif
 	qboolean	send_reliable_fragment;
 	qboolean	send_reliable;
 	sizebuf_t	send;
@@ -1670,7 +1678,9 @@ void Netchan_TransmitBits( netchan_t *chan, int length, const byte *data )
 		}
 	}
 
+#ifndef MISTER_HYBRID
 	memset( send_buf, 0, sizeof( send_buf ));
+#endif
 	MSG_Init( &send, "NetSend", send_buf, sizeof( send_buf ));
 
 	// prepare the packet header
@@ -1806,6 +1816,11 @@ void Netchan_TransmitBits( netchan_t *chan, int length, const byte *data )
 			, send_reliable ? 1 : 0
 			, (float)host.realtime );
 	}
+
+#ifdef MISTER_HYBRID
+	// the bit writer touches the dwords up to its last bit
+	memset( send_buf, 0, Q_min( sizeof( send_buf ), (size_t)(( MSG_GetNumBitsWritten( &send ) + 31 ) >> 5 ) * 4 ));
+#endif
 }
 
 /*

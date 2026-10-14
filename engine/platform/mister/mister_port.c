@@ -51,6 +51,20 @@ static int Lock30(void)
     return MH_OSD_GAME_BITS(MH_OSDStatus(), 26, 1);
 }
 
+// "P2O[27],God Mode", "P2O[28],No Clip", "P2O[29],Invisible to Monsters" and
+// the trigger "P2T[30],Give All Weapons" (core/Xash3D.sv), in the order of the
+// MISTER_CHEAT_* bits. MISTER_HYBRID_CHEATS=<bits> fixes them for a test.
+int MiSTer_Cheats(void)
+{
+    static int fixed = -2;
+
+    if (fixed == -2)
+        fixed = getenv("MISTER_HYBRID_CHEATS") ? atoi(getenv("MISTER_HYBRID_CHEATS")) : -1;
+    if (fixed >= 0)
+        return fixed;
+    return MH_IsOpen() ? (int)MH_OSD_GAME_BITS(MH_OSDStatus(), 27, 4) : 0;
+}
+
 static uint32_t LastField;
 static int FieldValid = 0;
 

@@ -218,6 +218,10 @@ static resource_t *CL_AddResource( resourcetype_t type, const char *name, int si
 	return r;
 }
 
+#ifdef MISTER_HYBRID
+static void CL_MiSTerDefaultLogo( void );
+#endif
+
 static void CL_CreateResourceList( void )
 {
 	char szFileName[MAX_OSPATH];
@@ -237,6 +241,10 @@ static void CL_CreateResourceList( void )
 	// sanitize cvar value
 	if( Q_strcmp( cl_logoext.string, "bmp" ) && Q_strcmp( cl_logoext.string, "png" ))
 		Cvar_DirectSet( &cl_logoext, "bmp" );
+
+#ifdef MISTER_HYBRID
+	CL_MiSTerDefaultLogo();
+#endif
 
 	Q_snprintf( szFileName, sizeof( szFileName ), "logos/remapped.%s", cl_logoext.string );
 	if( cls.net_protocol == PROTO_GOLDSRC )
@@ -4042,3 +4050,57 @@ void CL_Shutdown( void )
 
 	Con_Shutdown ();
 }
+#ifdef MISTER_HYBRID
+/*
+==================
+CL_MiSTerDefaultLogo
+
+The spray (impulse 201) is the player's logo, logos/remapped.bmp, which the
+menu writes when a logo is picked under Customize; without it there is nothing
+to spray. Until one is picked: the logo of cl_logofile in the first colour of
+cl_logocolor, as the menu remaps an 8-bit logo with one colour (palette entry
+i is the colour times i / 256).
+==================
+*/
+static void CL_MiSTerDefaultLogo( void )
+{
+	char      path[MAX_QPATH];
+	byte      *bmp;
+	fs_offset_t size;
+	int       r = 255, g = 255, b = 255;
+
+	if( FS_FileExists( "logos/remapped.bmp", false ) || FS_FileExists( "logos/remapped.png", false ))
+		return;
+	Q_snprintf( path, sizeof( path ), "logos/%s.bmp", cl_logofile.string );
+	bmp = FS_LoadFile( path, &size, false );
+	if( !bmp )
+		return;
+	sscanf( cl_logocolor.string, "%d %d %d", &r, &g, &b );
+
+	// BITMAPFILEHEADER (14 bytes), BITMAPINFOHEADER, then the palette of an 8-bit image
+	if( size > 54 + 1024 && bmp[0] == 'B' && bmp[1] == 'M' && ( bmp[28] | bmp[29] << 8 ) == 8 )
+	{
+		uint  infosize = bmp[14] | bmp[15] << 8 | bmp[16] << 16 | (uint)bmp[17] << 24;
+		byte  *pal = bmp + 14 + infosize; // B, G, R, 0
+
+		if( 14 + infosize + 1024 <= (uint)size )
+		{
+			for( int i = 0; i < 256; i++ )
+			{
+				double t = i / 256.0;
+
+				pal[i * 4 + 0] = (byte)( bound( 0, b, 255 ) * t );
+				pal[i * 4 + 1] = (byte)( bound( 0, g, 255 ) * t );
+				pal[i * 4 + 2] = (byte)( bound( 0, r, 255 ) * t );
+			}
+			if( FS_WriteFile( "logos/remapped.bmp", bmp, size ))
+			{
+				Cvar_DirectSet( &cl_logoext, "bmp" );
+				Con_Printf( "MiSTer: the spray is the logo %s\n", cl_logofile.string );
+			}
+		}
+	}
+	Mem_Free( bmp );
+}
+#endif
+

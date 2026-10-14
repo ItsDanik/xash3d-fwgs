@@ -117,22 +117,24 @@ static const keyname_t keynames[] =
 // A/B X/Y names match the Xbox controller layout
 #ifdef MISTER_HYBRID
 // MiSTer: the eight buttons of the core's "J1" list (core/Xash3D.sv) in its
-// order, the d-pad for a pad without sticks, the triggers
-{ "A_BUTTON",       K_A_BUTTON,            "+jump"           },
-{ "B_BUTTON",       K_B_BUTTON,            "+duck"           },
+// order, the d-pad, the stick clicks, the triggers (Danik, 2026-10-14; the
+// sticks move and look, a twin stick controller is needed). Jump and duck also
+// swim up and down. mister_walk toggles walking (Key_Init)
+{ "A_BUTTON",       K_A_BUTTON,            "+jump;+moveup"   },
+{ "B_BUTTON",       K_B_BUTTON,            "+duck;+movedown" },
 { "X_BUTTON",       K_X_BUTTON,            "+use"            },
 { "Y_BUTTON",       K_Y_BUTTON,            "+reload"         },
 { "BACK",           K_BACK_BUTTON,         "invnext"         },
 { "MODE",           K_MODE_BUTTON,         ""                },
 { "START",          K_START_BUTTON,        "cancelselect"    },
-{ "STICK1",         K_LSTICK,              ""                },
-{ "STICK2",         K_RSTICK,              ""                },
+{ "STICK1",         K_LSTICK,              "mister_walk"     },
+{ "STICK2",         K_RSTICK,              "impulse 100"     }, // flashlight
 { "L1_BUTTON",      K_L1_BUTTON,           "+attack2"        },
 { "R1_BUTTON",      K_R1_BUTTON,           "+attack"         },
-{ "DPAD_UP",        K_DPAD_UP,             "+forward"        },
-{ "DPAD_DOWN",      K_DPAD_DOWN,           "+back"           },
-{ "DPAD_LEFT",      K_DPAD_LEFT,           "+left"           },
-{ "DPAD_RIGHT",     K_DPAD_RIGHT,          "+right"          },
+{ "DPAD_UP",        K_DPAD_UP,             "lastinv"         },
+{ "DPAD_DOWN",      K_DPAD_DOWN,           "impulse 201"     }, // spray logo
+{ "DPAD_LEFT",      K_DPAD_LEFT,           "invprev"         },
+{ "DPAD_RIGHT",     K_DPAD_RIGHT,          "invnext"         },
 { "L2_BUTTON",      K_L2_BUTTON,           ""                },
 { "R2_BUTTON",      K_R2_BUTTON,           ""                },
 { "LTRIGGER",       K_JOY1,                "+attack2"        }, // L2 in SDL2
@@ -391,6 +393,14 @@ static void Key_Unbind_f( void )
 	Key_SetBinding( b, "" );
 }
 
+#ifdef MISTER_HYBRID
+// the gamepad's keys
+static qboolean Key_IsPadKey( int k )
+{
+	return ( k >= K_AUX1 && k <= K_AUX32 ) || k == K_JOY1 || k == K_JOY2;
+}
+#endif
+
 /*
 ===================
 Key_Unbindall_f
@@ -413,10 +423,8 @@ static void Key_Unbindall_f( void )
 	// with "unbindall": the pad keeps its layout until the config says otherwise
 	for( int i = 0; i < ARRAYSIZE( keynames ); i++ )
 	{
-		int k = keynames[i].keynum;
-
-		if(( k >= K_AUX1 && k <= K_AUX32 ) || k == K_JOY1 || k == K_JOY2 )
-			Key_SetBinding( k, keynames[i].binding );
+		if( Key_IsPadKey( keynames[i].keynum ))
+			Key_SetBinding( keynames[i].keynum, keynames[i].binding );
 	}
 #endif
 }
@@ -589,6 +597,33 @@ qboolean Cmd_GetKeysList( const char *s, char *completedname, int length, qboole
 
 ==============================================================================
 */
+#ifdef MISTER_HYBRID
+// The pad's default layout. A config.cfg written with an older one has its
+// bindings: the pad keys get this one once, then the player's own are kept
+#define MISTER_PAD_LAYOUT 2 // 2: d-pad weapons and spray, stick clicks walk and flashlight (2026-10-14)
+static CVAR_DEFINE_AUTO( mister_padlayout, "0", FCVAR_ARCHIVE, "layout of the pad's default bindings the config has" );
+
+/*
+===================
+Key_MiSTerPadLayout
+
+After the configs at startup
+===================
+*/
+void Key_MiSTerPadLayout( void )
+{
+	if( mister_padlayout.value >= MISTER_PAD_LAYOUT )
+		return;
+	for( int i = 0; i < ARRAYSIZE( keynames ); i++ )
+	{
+		if( Key_IsPadKey( keynames[i].keynum ))
+			Key_SetBinding( keynames[i].keynum, keynames[i].binding );
+	}
+	Cvar_DirectSet( &mister_padlayout, va( "%d", MISTER_PAD_LAYOUT ));
+	Con_Printf( "MiSTer: the pad has its new default layout %d\n", MISTER_PAD_LAYOUT );
+}
+#endif
+
 /*
 ===================
 Key_Init
@@ -607,6 +642,15 @@ void Key_Init( void )
 	// setup default binding. "unbindall" from config.cfg will be reset it
 	for( int i = 0; i < ARRAYSIZE( keynames ); i++ )
 		Key_SetBinding( keynames[i].keynum, keynames[i].binding );
+
+#ifdef MISTER_HYBRID
+	Cvar_RegisterVariable( &mister_padlayout );
+
+	// the left stick's click: walk until it is clicked again
+	Cbuf_AddText( "alias mister_walk mister_walk_on\n"
+		"alias mister_walk_on \"+speed; alias mister_walk mister_walk_off\"\n"
+		"alias mister_walk_off \"-speed; alias mister_walk mister_walk_on\"\n" );
+#endif
 
 	Cvar_RegisterVariable( &key_rotate );
 

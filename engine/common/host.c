@@ -1321,6 +1321,9 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 		// exec all files from userconfig.d
 		Cbuf_AddText( "userconfigd\n" );
 		Cbuf_Execute();
+#if defined( MISTER_HYBRID ) && !XASH_DEDICATED
+		Key_MiSTerPadLayout();
+#endif
 		break;
 	case HOST_DEDICATED:
 		// allways parse commandline in dedicated-mode
