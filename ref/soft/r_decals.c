@@ -60,11 +60,27 @@ void R_ClearDecals( void )
 	gDecalCount = 0;
 }
 
+#ifdef MISTER_HYBRID
+// a surface's cached textures are drawn again only where its light has changed
+// (D_CacheSurface): one that gets or loses a decal is drawn again whole
+static void R_DecalSurfaceChanged( msurface_t *surf )
+{
+	for( int i = 0; i < 4; i++ )
+	{
+		if( CACHESPOT( surf )[i] )
+			CACHESPOT( surf )[i]->image = NULL;
+	}
+}
+#endif
+
 // unlink pdecal from any surface it's attached to
 static void R_DecalUnlink( decal_t *pdecal )
 {
 	if( pdecal->psurface )
 	{
+#ifdef MISTER_HYBRID
+		R_DecalSurfaceChanged( pdecal->psurface );
+#endif
 		if( pdecal->psurface->pdecals == pdecal )
 		{
 			pdecal->psurface->pdecals = pdecal->pnext;
@@ -579,6 +595,9 @@ static void R_AddDecalToSurface( decal_t *pdecal, msurface_t *surf, decalinfo_t 
 
 	// force surface cache rebuild
 	surf->dlightframe = tr.framecount + 1;
+#ifdef MISTER_HYBRID
+	R_DecalSurfaceChanged( surf );
+#endif
 
 	// tag surface
 	pdecal->psurface = surf;

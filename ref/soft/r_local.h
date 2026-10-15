@@ -791,6 +791,10 @@ typedef struct surfcache_s
 	unsigned           height;                      // DEBUG only needed for debug
 	float              mipscale;
 	image_t            *image;
+#ifdef MISTER_HYBRID
+	int                lightmap;                    // where in data the lightmap it was built with is, 0 for none (r_surf.c)
+	int                framecount;                  // when it was last built or looked at
+#endif
 	byte               data[4];                     // width*height elements
 } surfcache_t;
 

@@ -58,6 +58,14 @@ static unsigned blocklights[10240]; // allow some very large lightmaps
 static float           surfscale;
 static qboolean        r_cache_thrash;         // set if surface cache is thrashing
 
+#ifdef MISTER_HYBRID
+// the blocks (one per luxel, at every mip level) R_DrawSurface draws and the
+// part R_DrawSurfaceDecals draws into: all of the surface, or only where its
+// light has changed (D_CacheSurface)
+static int r_drawrect[4]; // first column, first row, end column, end row
+static qboolean r_drawrect_on;
+#endif
+
 static int sc_size;
 surfcache_t     *sc_rover;
 static surfcache_t *sc_base;
@@ -401,6 +409,27 @@ void R_DrawSurface( void )
 	soffset = r_drawsurf.surf->info->lightmapmins[0];
 	basetoffset = r_drawsurf.surf->info->lightmapmins[1];
 
+#ifdef MISTER_HYBRID
+	int u0 = 0, v0 = 0, u1 = r_numhblocks;
+
+	if( r_drawrect_on )
+	{
+		u0 = r_drawrect[0];
+		v0 = r_drawrect[1];
+		u1 = r_drawrect[2];
+		r_numvblocks = r_drawrect[3] - v0;
+	}
+	// the texture repeats in whole blocks, so starting further in is the same
+	soffset = (( soffset >> r_drawsurf.surfmip ) + u0 * blocksize + ( smax << 16 )) % smax;
+	basetptr = &r_source[(((( basetoffset >> r_drawsurf.surfmip ) + v0 * blocksize
+				+ ( tmax << 16 )) % tmax ) * twidth )];
+
+	pcolumndest = r_drawsurf.surfdat + v0 * blocksize * surfrowbytes + u0 * blocksize;
+
+	for( u = u0; u < u1; u++ )
+	{
+		r_lightptr = blocklights + u + v0 * r_lightwidth;
+#else
 // << 16 components are to guarantee positive values for %
 	soffset = (( soffset >> r_drawsurf.surfmip ) + ( smax << 16 )) % smax;
 	basetptr = &r_source[(((( basetoffset >> r_drawsurf.surfmip )
@@ -411,6 +440,7 @@ void R_DrawSurface( void )
 	for( u = 0; u < r_numhblocks; u++ )
 	{
 		r_lightptr = blocklights + u;
+#endif
 
 		prowdestbase = pcolumndest;
 
@@ -1002,6 +1032,23 @@ static void R_DrawSurfaceDecals( void )
 
 		for( v = 0; v < height; v++ )
 		{
+#ifdef MISTER_HYBRID
+			int ubegin = 0, uend = w;
+
+			if( r_drawrect_on )
+			{
+				// only into the blocks drawn again: the rest has the decals already
+				const int bs = blocksize;
+
+				if( y + v < r_drawrect[1] * bs || y + v >= r_drawrect[3] * bs )
+				{
+					dest += r_drawsurf.rowbytes;
+					continue;
+				}
+				ubegin = Q_max( 0, r_drawrect[0] * bs - x );
+				uend = Q_min( w, r_drawrect[2] * bs - x );
+			}
+#endif
 			// int alpha1 = vid.alpha;
 			sv = ( skip + v ) * ( t2 - t1 ) / h + t1;
 			source = buffer + sv * tex->width + s1;
@@ -1012,7 +1059,12 @@ static void R_DrawSurfaceDecals( void )
 				if( w == s2 - s1 )
 					fstep = 0x10000;
 
+#ifdef MISTER_HYBRID
+				f = ubegin * fstep;
+				for( u = ubegin; u < uend; u++ )
+#else
 				for( u = 0; u < w; u++ )
+#endif
 				{
 					pixel_t src = source[f >> 16];
 					int     alpha = 7;
@@ -1059,6 +1111,7 @@ static void R_DrawSurfaceDecals( void )
 D_CacheSurface
 ================
 */
+
 surfcache_t *D_CacheSurface( msurface_t *surface, int miplevel )
 {
 	surfcache_t *cache;
@@ -1113,7 +1166,92 @@ surfcache_t *D_CacheSurface( msurface_t *surface, int miplevel )
 	    && cache->lightadj[3] == r_drawsurf.lightadj[3] )
 		return cache;
 
+#ifdef MISTER_HYBRID
+	// A dynamic light (the flashlight, a muzzle flash) changes the light of a
+	// few blocks of the surfaces it reaches, if any, but every one was built
+	// again whole every frame: 45 surfaces in a room with the flashlight on,
+	// 10 of the frame's 25ms on the MiSTer. A block of the cache (16x16 texels at mip 0, one per
+	// luxel) is the texture shaded from the four luxels at its corners, with
+	// the decals over it, so a cache keeps the lightmap it was built with
+	// (a byte per luxel after the pixels) and while its texture stays, only
+	// the blocks whose luxels have changed are drawn again: none while the
+	// light stays where it is, the same for light styles. Built once a frame,
+	// too: a surface can be on the list more than once.
+	qboolean byblocks = !FBitSet( surface->flags, SURF_CONVEYOR )
+		&& !FBitSet( surface->texinfo->flags, TEX_WORLD_LUXELS )
+		&& gEngfuncs.Mod_SampleSizeForFace( surface ) == 16
+		&& LM_SAMPLE_SIZE_AUTO( surface ) == 16;
+	const int lmwidth = ( surface->info->lightextents[0] >> 4 ) + 1;
+	const int lmsize = lmwidth * (( surface->info->lightextents[1] >> 4 ) + 1 );
+
+	r_drawrect_on = false;
+
+	if( byblocks && cache && cache->lightmap
+	    && cache->image == r_drawsurf.image
+	    && cache->lightadj[0] == r_drawsurf.lightadj[0]
+	    && cache->lightadj[1] == r_drawsurf.lightadj[1]
+	    && cache->lightadj[2] == r_drawsurf.lightadj[2]
+	    && cache->lightadj[3] == r_drawsurf.lightadj[3] )
+	{
+		if( cache->framecount == tr.framecount )
+			return cache; // with the same light
+
+		cache->framecount = tr.framecount;
+		cache->dlight = surface->dlightframe == tr.framecount;
+		R_UpdateSurfaceCachedLight( surface );
+
+		// the other mip levels' caches look at their lightmaps when next drawn
+		for( int i = 0; i < 4; i++ )
+		{
+			if( i != miplevel && CACHESPOT( surface )[i] )
+				CACHESPOT( surface )[i]->dlight = 1;
+		}
+
+		r_drawsurf.surf = surface;
+		R_BuildLightMap( );
+
+		byte *lm = cache->data + cache->lightmap;
+		int  s0 = lmwidth, t0 = lmsize, s1 = -1, t1 = -1;
+
+		for( int i = 0; i < lmsize; i++ )
+		{
+			if( lm[i] != blocklights[i] >> 8 )
+			{
+				int s = i % lmwidth, t = i / lmwidth;
+
+				lm[i] = blocklights[i] >> 8;
+				s0 = Q_min( s0, s );
+				s1 = Q_max( s1, s );
+				t0 = Q_min( t0, t );
+				t1 = Q_max( t1, t );
+			}
+		}
+
+		if( s1 < 0 )
+			return cache; // the light it has
+
+		// block u is shaded from luxels u and u + 1
+		r_drawrect[0] = Q_max( s0 - 1, 0 );
+		r_drawrect[1] = Q_max( t0 - 1, 0 );
+		r_drawrect[2] = Q_min( s1 + 1, lmwidth - 1 );
+		r_drawrect[3] = Q_min( t1 + 1, lmsize / lmwidth - 1 );
+		r_drawrect_on = true;
+
+		r_drawsurf.surfmip = miplevel;
+		r_drawsurf.surfwidth = surface->info->lightextents[0] >> miplevel;
+		r_drawsurf.rowbytes = r_drawsurf.surfwidth;
+		r_drawsurf.surfheight = surface->info->lightextents[1] >> miplevel;
+		r_drawsurf.surfdat = (pixel_t *)cache->data;
+		R_DrawSurface();
+		R_DrawSurfaceDecals();
+		r_drawrect_on = false;
+		return cache;
+	}
+
 	if( surface->dlightframe == tr.framecount )
+#else
+	if( surface->dlightframe == tr.framecount )
+#endif
 	{
 		// invalidate dlight cache
 		for( int i = 0; i < 4; i++ )
@@ -1151,8 +1289,14 @@ surfcache_t *D_CacheSurface( msurface_t *surface, int miplevel )
 		// room is made by throwing out the textures of other surfaces, and
 		// spans that are still to be drawn may be of one of them
 		R_JobsDrain();
+#ifdef MISTER_HYBRID
+		cache = D_SCAlloc( r_drawsurf.surfwidth,
+				   r_drawsurf.surfwidth * r_drawsurf.surfheight * 2 + ( byblocks ? lmsize : 0 ));
+		cache->lightmap = byblocks ? r_drawsurf.surfwidth * r_drawsurf.surfheight * 2 : 0;
+#else
 		cache = D_SCAlloc( r_drawsurf.surfwidth,
 				   r_drawsurf.surfwidth * r_drawsurf.surfheight * 2 );
+#endif
 		CACHESPOT( surface )[miplevel] = cache;
 		cache->owner = &CACHESPOT( surface )[miplevel];
 		cache->mipscale = surfscale;
@@ -1162,6 +1306,9 @@ surfcache_t *D_CacheSurface( msurface_t *surface, int miplevel )
 		cache->dlight = 1;
 	else
 		cache->dlight = 0;
+#ifdef MISTER_HYBRID
+	cache->framecount = tr.framecount;
+#endif
 
 	r_drawsurf.surfdat = (pixel_t *)cache->data;
 
@@ -1184,6 +1331,15 @@ surfcache_t *D_CacheSurface( msurface_t *surface, int miplevel )
 	// rasterize the surface into the cache
 	R_DrawSurface();
 	R_DrawSurfaceDecals();
+#ifdef MISTER_HYBRID
+	if( cache->lightmap )
+	{
+		byte *lm = cache->data + cache->lightmap;
+
+		for( int i = 0; i < lmsize; i++ )
+			lm[i] = blocklights[i] >> 8;
+	}
+#endif
 
 	return cache;
 }
