@@ -37,6 +37,9 @@ GNU General Public License for more details.
 #include "vgui_draw.h"
 #include "sound.h"		// SND_STOP_LOOPING
 #include "platform/platform.h"
+#ifdef MISTER_HYBRID
+#include "platform/mister/mister_port.h"
+#endif
 
 #define MAX_LINELENGTH	80
 #define TEXT_MSGNAME	"TextMessage"
@@ -325,15 +328,19 @@ draw hudsprite routine
 */
 void SPR_AdjustSize( float *x, float *y, float *w, float *h )
 {
-	if( refState.width == clgame.scrInfo.iWidth && refState.height == clgame.scrInfo.iHeight )
+	// the HUD's screen is the rows from hudTop down (CL_GetScreenInfo)
+	if( refState.width == clgame.scrInfo.iWidth && clgame.hudHeight == clgame.scrInfo.iHeight )
+	{
+		*y += clgame.hudTop;
 		return;
+	}
 
 	// scale for screen sizes
 	float xscale = refState.width / (float)clgame.scrInfo.iWidth;
-	float yscale = refState.height / (float)clgame.scrInfo.iHeight;
+	float yscale = clgame.hudHeight / (float)clgame.scrInfo.iHeight;
 
 	*x *= xscale;
-	*y *= yscale;
+	*y = *y * yscale + clgame.hudTop;
 	*w *= xscale;
 	*h *= yscale;
 }
@@ -342,7 +349,7 @@ static void SPR_AdjustTexCoords( int texnum, float width, float height, float *s
 {
 	const qboolean filtering = REF_GET_PARM( PARM_TEX_FILTERING, texnum );
 	const int xremainder = refState.width % clgame.scrInfo.iWidth;
-	const int yremainder = refState.height % clgame.scrInfo.iHeight;
+	const int yremainder = clgame.hudHeight % clgame.scrInfo.iHeight;
 
 	if(( filtering || xremainder ) && refState.width != clgame.scrInfo.iWidth )
 	{
@@ -351,7 +358,7 @@ static void SPR_AdjustTexCoords( int texnum, float width, float height, float *s
 		*s2 -= 0.5f;
 	}
 
-	if(( filtering || yremainder ) && refState.height != clgame.scrInfo.iHeight )
+	if(( filtering || yremainder ) && clgame.hudHeight != clgame.scrInfo.iHeight )
 	{
 		// align to texel if scaling
 		*t1 += 0.5f;
@@ -855,10 +862,10 @@ static void CL_DrawCrosshair( void )
 
 	// back to logical sizes
 	xscale = (float)clgame.scrInfo.iWidth / refState.width;
-	yscale = (float)clgame.scrInfo.iHeight / refState.height;
+	yscale = (float)clgame.scrInfo.iHeight / clgame.hudHeight;
 
 	x *= xscale;
-	y *= yscale;
+	y = ( y - clgame.hudTop ) * yscale;
 
 	// move at center the screen
 	x -= 0.5f * width;
@@ -1666,6 +1673,22 @@ int GAME_EXPORT CL_GetScreenInfo( SCREENINFO *pscrinfo )
 	clgame.scrInfo.iSize = sizeof( clgame.scrInfo );
 	clgame.scrInfo.iFlags = SCRINFO_SCREENFLASH;
 
+	// The HUD's screen: all of it, or with MISTER_HYBRID in 240 (and 480)
+	// lines the rows between the HUD margins of the OSD, which the 3D view
+	// goes on behind (hybrid/README.md, "HUD margins"). The game's library
+	// asks for this every frame (CHud::Think), so a change shows at once.
+	clgame.hudTop = 0;
+	clgame.hudHeight = refState.height;
+#ifdef MISTER_HYBRID
+	{
+		int top, bottom;
+
+		MiSTer_HudMargins( refState.height, &top, &bottom );
+		clgame.hudTop = top;
+		clgame.hudHeight = refState.height - top - bottom;
+	}
+#endif
+
 	if( hud_scale.value >= 320.0f && hud_scale.value >= hud_scale_minimal_width.value )
 	{
 		scale_factor = refState.width / hud_scale.value;
@@ -1681,13 +1704,13 @@ int GAME_EXPORT CL_GetScreenInfo( SCREENINFO *pscrinfo )
 	if( apply_scale_factor )
 	{
 		clgame.scrInfo.iWidth = (float)refState.width / scale_factor;
-		clgame.scrInfo.iHeight = (float)refState.height / scale_factor;
+		clgame.scrInfo.iHeight = (float)clgame.hudHeight / scale_factor;
 		SetBits( clgame.scrInfo.iFlags, SCRINFO_STRETCHED );
 	}
 	else
 	{
 		clgame.scrInfo.iWidth = refState.width;
-		clgame.scrInfo.iHeight = refState.height;
+		clgame.scrInfo.iHeight = clgame.hudHeight;
 		ClearBits( clgame.scrInfo.iFlags, SCRINFO_STRETCHED );
 	}
 

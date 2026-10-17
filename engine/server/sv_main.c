@@ -609,23 +609,30 @@ SV_MiSTerCheats
 The OSD's Cheats page (core/Xash3D.sv). The switches decide: while one is on
 the player has it, through saved games and level changes, and when it is
 turned off it is gone (a god mode saved with a game as well). No Clip only
-while the player is alive. Give All Weapons is the game's "impulse 101",
-which the game's library allows with sv_cheats (read when it runs).
+while the player is alive. The triggers are the game's own cheats, which its
+library allows with sv_cheats (read when they run): Give All Weapons is
+"impulse 101", Long Jump Module "give item_longjump" (taken only with the
+suit, as the item on a map). A trigger selected while there is no player,
+or no level runs, is dropped.
 =================
 */
 static void SV_MiSTerCheats( void )
 {
 	static int last;
-	int        bits = MiSTer_Cheats();
-	int        changed = bits ^ last;
 	sv_client_t *cl = svs.clients;
 	edict_t    *ent;
+	int        bits, changed;
 
 	if( sv.background || !cl || svs.maxclients != 1 || cl->state != cs_spawned || !SV_IsValidEdict( cl->edict ))
-		return; // the change is seen when there is a player
-	last = bits;
+	{
+		MiSTer_Cheats( false ); // the switches are seen when there is a player
+		return;
+	}
+	bits = MiSTer_Cheats( true );
+	changed = ( bits ^ last ) & MISTER_CHEAT_SWITCHES;
+	last = bits & MISTER_CHEAT_SWITCHES;
 	ent = cl->edict;
-	if( changed & ~MISTER_CHEAT_GIVE )
+	if( changed )
 		Con_Printf( "MiSTer cheats: god mode %s, no clip %s, invisible to monsters %s\n",
 			( bits & MISTER_CHEAT_GOD ) ? "on" : "off", ( bits & MISTER_CHEAT_NOCLIP ) ? "on" : "off",
 			( bits & MISTER_CHEAT_NOTARGET ) ? "on" : "off" );
@@ -646,10 +653,15 @@ static void SV_MiSTerCheats( void )
 	else if( ent->v.movetype == MOVETYPE_NOCLIP )
 		ent->v.movetype = MOVETYPE_WALK;
 
-	if( FBitSet( bits, MISTER_CHEAT_GIVE ) && FBitSet( changed, MISTER_CHEAT_GIVE ) && ent->v.health > 0.0f )
+	if( FBitSet( bits, MISTER_CHEAT_GIVE|MISTER_CHEAT_LONGJUMP ) && ent->v.health > 0.0f )
 	{
+		Con_Printf( "MiSTer cheats:%s%s\n", FBitSet( bits, MISTER_CHEAT_GIVE ) ? " give all weapons" : "",
+			FBitSet( bits, MISTER_CHEAT_LONGJUMP ) ? " long jump module" : "" );
 		Cvar_Set( "sv_cheats", "1" );
-		Cbuf_AddText( "impulse 101\n" );
+		if( FBitSet( bits, MISTER_CHEAT_GIVE ))
+			Cbuf_AddText( "impulse 101\n" );
+		if( FBitSet( bits, MISTER_CHEAT_LONGJUMP ))
+			Cbuf_AddText( "give item_longjump\n" );
 	}
 }
 #endif

@@ -47,9 +47,6 @@ int MiSTer_Paced(void);
 // The next call starts counting anew, after the game stood still (loading)
 void MiSTer_ResetFrames(void);
 
-// Before the game starts: lets the player pick one of several data sets on
-// the screen. Returns the index, -1 to quit
-int MiSTer_PickGame(const char *const *names, int count, int selected);
 // Problems the player can fix (missing data): shown on the screen until a
 // button is pressed, in plain words that say which files go where
 void MiSTer_ShowError(const char *message);
@@ -74,22 +71,31 @@ void MiSTer_Mark(int what);
 
 // Rows of the game's video mode, which is 320 wide: 200 or 240 (OSD option Resolution)
 int MiSTer_GameHeight(void);
+// The HUD margins of the OSD's CRT Options for a screen of `height` rows: the
+// rows between the HUD and the top and bottom edge. 0 in 200 rows (the HUD
+// lines are greyed out then), twice the OSD's in 480. Read every frame.
+void MiSTer_HudMargins(int height, int *top, int *bottom);
 
-// The OSD's Cheats page: MISTER_CHEAT_* bits that are on
+// The OSD's Cheats page, for the server's frame: the MISTER_CHEAT_* switches
+// that are on, and the triggers selected in this frame. `player`: 0 while
+// there is none to give them to, and the triggers are dropped
 #define MISTER_CHEAT_GOD      1 // God Mode
 #define MISTER_CHEAT_NOCLIP   2 // No Clip
 #define MISTER_CHEAT_NOTARGET 4 // Invisible to Monsters
-#define MISTER_CHEAT_GIVE     8 // Give All Weapons (a trigger, held 0.25s by the core)
-int MiSTer_Cheats(void);
+#define MISTER_CHEAT_GIVE     8 // the trigger Give All Weapons
+#define MISTER_CHEAT_LONGJUMP 16 // the trigger Long Jump Module
+#define MISTER_CHEAT_SWITCHES 7
+int MiSTer_Cheats(int player);
 
-// Before the engine starts: finds the games that are installed next to the
-// binary (a folder with the game's liblist.gam and our libraries for it) and,
-// if there are several, lets the player pick one. Sets XASH3D_GAME. Returns 0
-// to quit: the player left the list, or no game is there (which the screen
-// has told him)
+// Before the engine starts: the game of the menu entry the core was loaded
+// from (MISTER_HYBRID_SET, Xash3D_<id>), or the one installed next to the
+// binary, or the one the player picks from the list of those (MH_PickGame()).
+// Then "Loading <title>..." until the first frame. Sets XASH3D_GAME. Returns 0
+// to quit: the player left the list, or the game is not there (said on the
+// screen until the player left the core)
 int MiSTer_SelectGame(void);
 // Exit code of the process after the player quit: the launcher starts the
-// game again (back to the list of MiSTer_PickGame) or returns to the menu
+// game again (back to the list of MiSTer_SelectGame) or returns to the menu
 int MiSTer_ExitCode(void);
 
 #ifdef __cplusplus

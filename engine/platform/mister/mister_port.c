@@ -37,6 +37,33 @@ int MiSTer_GameHeight(void)
     return MH_IsOpen() && MH_OSD_GAME_BITS(MH_OSDStatus(), 25, 1) ? 240 : 200;
 }
 
+// "D0P1O[81:77],HUD (Top)" and "D0P1O[86:82],HUD (Bottom)" (core/Xash3D.sv),
+// greyed out with mask bit 0 while the game's mode is 320x200 (MiSTer_WaitFrame()).
+// The game's library draws the HUD where it would on a screen of the rows
+// between them (CL_GetScreenInfo() in client/dll_int/cl_game.c).
+// MISTER_HYBRID_HUD=<top>,<bottom> fixes them for a test (the library).
+void MiSTer_HudMargins(int height, int *top, int *bottom)
+{
+    int scale = height >= 480 ? 2 : 1;
+
+    *top = *bottom = 0;
+    if (height < 240 || !MH_IsOpen())
+        return;
+    MH_HudMargins(top, bottom);
+    *top *= scale;
+    *bottom *= scale;
+}
+
+static void HudLines(void)
+{
+    static int mask = -1;
+    int m = MiSTer_GameHeight() == 240 ? 0 : 1;
+
+    if (m != mask)
+        MH_SetMenuMask(m);
+    mask = m;
+}
+
 // "O[26],Lock to 30 FPS,Off,On;": a frame every second field, an even 30 a
 // second where the renderer cannot keep up with every field. Off is still at
 // most one frame per field: 60. MISTER_HYBRID_LOCK30=0|1 fixes it for a test.
@@ -52,17 +79,47 @@ static int Lock30(void)
 }
 
 // "P2O[27],God Mode", "P2O[28],No Clip", "P2O[29],Invisible to Monsters" and
-// the trigger "P2T[30],Give All Weapons" (core/Xash3D.sv), in the order of the
-// MISTER_CHEAT_* bits. MISTER_HYBRID_CHEATS=<bits> fixes them for a test.
-int MiSTer_Cheats(void)
+// the triggers "P2T[56],Give All Weapons", "P2T[57],Long Jump Module"
+// (core/Xash3D.sv), in the order of the MISTER_CHEAT_* bits. The triggers are
+// read every frame (MiSTer_WaitFrame()) and kept for the server's next frame:
+// one selected while no level runs (the menus, paused) is dropped after half
+// a second without one.
+// MISTER_HYBRID_CHEATS=<bits> fixes them for a test: the switches stay, the
+// triggers are selected once there is a player.
+static int TriggersPending, CheatsAsked, NotAsked;
+
+static void PollTriggers(void)
+{
+    int triggers = MH_OSDTriggers() & 3;
+
+    if (CheatsAsked)
+        NotAsked = 0;
+    else if (++NotAsked > 30)
+        TriggersPending = 0;
+    CheatsAsked = 0;
+    TriggersPending |= triggers << 3;
+}
+
+int MiSTer_Cheats(int player)
 {
     static int fixed = -2;
+    int triggers;
 
     if (fixed == -2)
         fixed = getenv("MISTER_HYBRID_CHEATS") ? atoi(getenv("MISTER_HYBRID_CHEATS")) : -1;
-    if (fixed >= 0)
-        return fixed;
-    return MH_IsOpen() ? (int)MH_OSD_GAME_BITS(MH_OSDStatus(), 27, 4) : 0;
+    if (fixed >= 0) {
+        if (!player)
+            return fixed & MISTER_CHEAT_SWITCHES;
+        triggers = fixed & ~MISTER_CHEAT_SWITCHES;
+        fixed &= MISTER_CHEAT_SWITCHES;
+        return fixed | triggers;
+    }
+    if (!MH_IsOpen())
+        return 0;
+    CheatsAsked = 1;
+    triggers = player ? TriggersPending : 0;
+    TriggersPending = 0;
+    return (int)MH_OSD_GAME_BITS(MH_OSDStatus(), 27, 3) | triggers;
 }
 
 static uint32_t LastField;
@@ -234,7 +291,32 @@ unsigned MiSTer_WaitFrame(void)
         FieldValid = 1;
     }
     MiSTer_Mark(MISTER_T_WAIT);
+    PollTriggers();
+    HudLines();
     lock = Lock30();
+    if (!MH_Interlaced()) {
+        // A frame drawn from one vblank to the next was shown at the next
+        // only if it was ready by then: about 14ms of a field's 16.8 here,
+        // and every tenth was not, so the frame before stayed a field longer
+        // and this one was never shown. Each frame is drawn a field ahead
+        // now (LastField is the field the last one is shown at), and the
+        // library hands it to the core in the field before its own: one that
+        // takes longer than a field is still in time.
+        uint32_t target = LastField + (lock ? 2 : 1);
+
+        MH_WaitField(target - 3); // not before the field two before its own
+        field = MH_FieldCounter();
+        if ((int32_t)(field + 1 - target) > 0)
+            target = field + 1; // too late for it: the next vblank
+        if (!MH_IsOpen())
+            return 0;
+        MH_PresentAtField(target);
+        fields = target - LastField;
+        LastField = target;
+        MiSTer_Mark(MISTER_T_OTHER);
+        FpsLog(fields);
+        return fields;
+    }
     MH_WaitFrame(LastField);
     if (lock)
         MH_WaitField(LastField + 1); // not before the second field after the last frame
@@ -254,84 +336,57 @@ int MiSTer_Paced(void)
 // The player came through the list: quitting a game goes back to it
 static int PickedFromList = 0;
 
-int MiSTer_PickGame(const char *const *names, int count, int selected)
-{
-    int pick;
-
-    if (!MH_Open())
-        return selected;
-    pick = MH_UI_Menu(TITLE, "Select a game:", names, count, selected);
-    if (pick < 0 || pick >= count)
-        return -1;
-    PickedFromList = 1;
-    MH_UI_Message(TITLE, "Loading...", 0);
-    return pick;
-}
-
 void MiSTer_ShowError(const char *message)
 {
     if (MH_Open())
         MH_UI_Message(TITLE, message, MH_UI_WAIT | MH_UI_ERROR);
 }
 
-// Folders of the games we build libraries for (build.sh), in the order of the list
-static const struct {
-    const char *dir, *name;
-} Games[] = {
-    { "valve", "Half-Life" },
-    { "gearbox", "Half-Life: Opposing Force" },
-    { "bshift", "Half-Life: Blue Shift" },
+// The games we build libraries for (build.sh), in the order of the list. Each
+// is a menu entry (package/games.txt: the same ids and titles), the set name
+// Xash3D_<id>. Every game takes what it does not have itself from Half-Life's
+// folder, valve, which our package has as well (our libraries and
+// extras.pk3): liblist.gam and halflife.wad are the game's own, in the Steam
+// version and on the CD. Messages: 4 lines of 71, %s the game's folder.
+static const char *const HalfLifeFiles[] = { "valve/liblist.gam", "valve/halflife.wad", NULL };
+static const char *const OpposingForceFiles[] = { "valve/liblist.gam", "valve/halflife.wad",
+                                                  "gearbox/liblist.gam", NULL };
+static const char *const BlueShiftFiles[] = { "valve/liblist.gam", "valve/halflife.wad",
+                                              "bshift/liblist.gam", NULL };
+static const struct mh_game Games[] = {
+    { "HL", "Half-Life", HalfLifeFiles, NULL,
+      "Half-Life was not found. Copy its folder valve (Steam or CD), with liblist.gam "
+      "and halflife.wad in it, into %s/ on the SD card, over the one there." },
+    { "OF", "HL: Opposing Force", OpposingForceFiles, NULL,
+      "Opposing Force was not found. It needs the folders valve (Half-Life, with "
+      "liblist.gam and halflife.wad) and gearbox (Opposing Force, with liblist.gam), "
+      "from Steam or the CDs, in %s/ on the SD card." },
+    { "BS", "HL: Blue Shift", BlueShiftFiles, NULL,
+      "Blue Shift was not found. It needs the folders valve (Half-Life, with "
+      "liblist.gam and halflife.wad) and bshift (Blue Shift, with liblist.gam), "
+      "from Steam or the CD, in %s/ on the SD card." },
 };
-// our client library of a game: the MiSTer's, or this PC's for tests with fakecore
-#ifdef __arm__
-#define CLIENT_LIBRARY "cl_dlls/client_armv7hf.so"
-#else
-#define CLIENT_LIBRARY "cl_dlls/client_amd64.so"
-#endif
+static const char *const GameDirs[] = { "valve", "gearbox", "bshift" };
 #define NUM_GAMES ((int)(sizeof(Games) / sizeof(Games[0])))
-
-static int HasFile(const char *base, const char *dir, const char *file)
-{
-    char path[1024];
-
-    snprintf(path, sizeof(path), "%s/%s/%s", base, dir, file);
-    return access(path, R_OK) == 0;
-}
+#define NO_GAME "No game found. Copy the folder valve of Half-Life (Steam or CD), with " \
+                "liblist.gam and halflife.wad in it, into %s/ on the SD card; gearbox " \
+                "(Opposing Force) and bshift (Blue Shift) go next to it."
 
 int MiSTer_SelectGame(void)
 {
     const char *base = getenv("XASH3D_BASEDIR");
-    const char *names[NUM_GAMES];
-    int found[NUM_GAMES];
-    int count = 0, pick = 0, i;
+    char text[MH_MSG_COLS + 1];
+    int pick;
 
     // a game given on the command line, or no core: as on a PC
     if (getenv("XASH3D_GAME") || !MH_Open())
         return 1;
-    if (!base)
-        base = ".";
-    // every game takes what it does not have itself from Half-Life's folder
-    if (HasFile(base, "valve", "liblist.gam") && HasFile(base, "valve", "halflife.wad")) {
-        for (i = 0; i < NUM_GAMES; i++) {
-            if (HasFile(base, Games[i].dir, "liblist.gam") && HasFile(base, Games[i].dir, CLIENT_LIBRARY)) {
-                found[count] = i;
-                names[count++] = Games[i].name;
-            }
-        }
-    }
-    if (!count) {
-        MiSTer_ShowError("Half-Life was not found.\n\n"
-                         "Copy the folder \"valve\" of your Half-Life to games/Xash3D on the SD card, "
-                         "over the one that is there. \"gearbox\" (Opposing Force) and \"bshift\" "
-                         "(Blue Shift) go next to it.");
+    pick = MH_PickGame(Games, NUM_GAMES, base, NO_GAME, &PickedFromList);
+    if (pick < 0)
         return 0;
-    }
-    if (count > 1) {
-        pick = MiSTer_PickGame(names, count, 0);
-        if (pick < 0)
-            return 0;
-    }
-    setenv("XASH3D_GAME", Games[found[pick]].dir, 1);
+    snprintf(text, sizeof(text), "Loading %s...", Games[pick].name);
+    MH_UI_Message(TITLE, text, 0);
+    setenv("XASH3D_GAME", GameDirs[pick], 1);
     return 1;
 }
 

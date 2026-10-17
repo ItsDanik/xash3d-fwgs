@@ -495,6 +495,7 @@ typedef struct
 	screen_shake_t	shake;			// screen shake
 	center_print_t	centerPrint;		// centerprint variables
 	SCREENINFO	scrInfo;			// actual screen info
+	int		hudTop, hudHeight;		// the rows the HUD is drawn in (MISTER_HYBRID: the HUD margins)
 	ref_overview_t	overView;			// overView params
 	color24		palette[256];		// palette used for particle colors
 

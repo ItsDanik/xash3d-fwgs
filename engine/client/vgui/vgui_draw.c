@@ -248,6 +248,7 @@ static void GAME_EXPORT VGUI_SetPaintOffset( int x, int y )
 	Vector2Set( vgui.paint_offset, x, y );
 
 	SPR_AdjustSize( &fx, &fy, &fw, &fh );
+	fy -= clgame.hudTop; // VGUI_DrawQuad adds it
 	ref.dllFuncs.R_Set2DOffset( fx, fy );
 }
 
@@ -264,12 +265,12 @@ static qboolean GAME_EXPORT VGUI_IsInGame( void )
 static void GAME_EXPORT VGUI_GetMousePos( int *_x, int *_y )
 {
 	float xscale = (float)refState.width / (float)clgame.scrInfo.iWidth;
-	float yscale = (float)refState.height / (float)clgame.scrInfo.iHeight;
+	float yscale = (float)clgame.hudHeight / (float)clgame.scrInfo.iHeight;
 	int x, y;
 
 	Platform_GetMousePos( &x, &y );
 	*_x = x / xscale;
-	*_y = y / yscale;
+	*_y = ( y - clgame.hudTop ) / yscale;
 }
 
 static void GAME_EXPORT VGUI_CursorSelect( VGUI_DefaultCursor cursor )
@@ -628,8 +629,8 @@ void VGui_MouseMove( int x, int y )
 	if( vgui.dllFuncs.MouseMove )
 	{
 		float xscale = (float)refState.width / (float)clgame.scrInfo.iWidth;
-		float yscale = (float)refState.height / (float)clgame.scrInfo.iHeight;
-		vgui.dllFuncs.MouseMove( x / xscale, y / yscale );
+		float yscale = (float)clgame.hudHeight / (float)clgame.scrInfo.iHeight;
+		vgui.dllFuncs.MouseMove( x / xscale, ( y - clgame.hudTop ) / yscale );
 	}
 }
 
