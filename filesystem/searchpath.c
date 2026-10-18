@@ -298,6 +298,14 @@ static uint32_t FS_PathExecFlag( const char *dir )
 	if( !Q_strncmp( dir, "/data/", 6 ))
 		return FS_EXEC_PATH;
 	return 0;
+#elif MISTER_HYBRID
+	// the game's data may be on a USB drive, mounted noexec: then it is the
+	// base directory and the libraries that came with the port are in the
+	// read-only one on the SD card, the only one they are loaded from (also
+	// when the player copied them to the USB drive with the rest)
+	if( !COM_StringEmpty( fs_rodir ) && Q_strnicmp( dir, fs_rodir, Q_strlen( fs_rodir )))
+		return 0;
+	return FS_EXEC_PATH;
 #else // !XASH_ANDROID
 	// FIXME: read noexec flag on *nix systems?
 	(void)dir;

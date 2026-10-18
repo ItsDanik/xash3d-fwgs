@@ -356,20 +356,20 @@ static const char *const BlueShiftFiles[] = { "valve/liblist.gam", "valve/halfli
 static const struct mh_game Games[] = {
     { "HL", "Half-Life", HalfLifeFiles, NULL,
       "Half-Life was not found. Copy its folder valve (Steam or CD), with liblist.gam "
-      "and halflife.wad in it, into %s/ on the SD card, over the one there." },
+      "and halflife.wad in it, into %s/." },
     { "OF", "HL: Opposing Force", OpposingForceFiles, NULL,
       "Opposing Force was not found. It needs the folders valve (Half-Life, with "
       "liblist.gam and halflife.wad) and gearbox (Opposing Force, with liblist.gam), "
-      "from Steam or the CDs, in %s/ on the SD card." },
+      "from Steam or the CDs, in %s/." },
     { "BS", "HL: Blue Shift", BlueShiftFiles, NULL,
       "Blue Shift was not found. It needs the folders valve (Half-Life, with "
       "liblist.gam and halflife.wad) and bshift (Blue Shift, with liblist.gam), "
-      "from Steam or the CD, in %s/ on the SD card." },
+      "from Steam or the CD, in %s/." },
 };
 static const char *const GameDirs[] = { "valve", "gearbox", "bshift" };
 #define NUM_GAMES ((int)(sizeof(Games) / sizeof(Games[0])))
 #define NO_GAME "No game found. Copy the folder valve of Half-Life (Steam or CD), with " \
-                "liblist.gam and halflife.wad in it, into %s/ on the SD card; gearbox " \
+                "liblist.gam and halflife.wad in it, into %s/; gearbox " \
                 "(Opposing Force) and bshift (Blue Shift) go next to it."
 
 int MiSTer_SelectGame(void)

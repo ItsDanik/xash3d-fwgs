@@ -30,6 +30,9 @@ def configure(conf):
 	if conf.check_cc(fragment=DIRENT_D_TYPE_TEST, msg='Checking for d_type field in struct dirent', mandatory=False):
 		conf.define('HAVE_DIRENT_D_TYPE', 1)
 
+	# the engine's --mister-hybrid: libraries only from the read-only directory, if there is one
+	conf.env.FS_MISTER_HYBRID = conf.options.MISTER_HYBRID
+
 def build(bld):
 	bld(name = 'filesystem_includes', export_includes = '.')
 
@@ -43,6 +46,7 @@ def build(bld):
 		features = 'seq format',
 		source = bld.path.ant_glob(['*.c', '*.cpp']),
 		use = libs,
+		defines = 'MISTER_HYBRID=1' if bld.env.FS_MISTER_HYBRID else '',
 		install_path = bld.env.LIBDIR)
 
 	if bld.env.TESTS:
