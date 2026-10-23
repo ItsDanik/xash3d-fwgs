@@ -87,10 +87,31 @@ void MiSTer_HudMargins(int height, int *top, int *bottom);
 #define MISTER_CHEAT_SWITCHES 7
 int MiSTer_Cheats(int player);
 
+// Rumble, at the strength of the OSD's "Rumble" (On, Strong, Off), given to
+// the controllers by MiSTer_WaitFrame() (MH_Rumble()). Strengths are those of
+// the heavy (slow) and light (fast) motor, 0..255 at On.
+// The player's own weapon event (events/<weapon>.sc, cl_events.c), with its
+// parameters: a shot, the gauss charging, the egon's beam from its start to
+// events/egon_stop.sc
+void MiSTer_RumbleEvent(const char *name, float fparam1, int iparam1, int bparam2);
+// The user message Damage (cl_parse.c): what the armour took and the health
+void MiSTer_RumbleDamage(int armor, int health);
+// TE_EXPLOSION (cl_tent.c), `distance` units from the player's eye
+void MiSTer_RumbleExplosion(float distance);
+// The screen shake (Platform_Vibrate2(), joy_sdl2.c): this strength for `ms`
+// milliseconds, renewed by the engine every frame while the shake lasts
+void MiSTer_RumbleShake(int strong, int weak, int ms);
+// Every client frame: whether a level runs (MISTER_RUMBLE_*). Nothing rumbles
+// while it does not, and the egon and the gauss stop for good without a level
+#define MISTER_RUMBLE_NONE    0 // no level: loading, disconnected
+#define MISTER_RUMBLE_PAUSED  1 // a level, paused, in the menu or the console
+#define MISTER_RUMBLE_RUNNING 2
+void MiSTer_RumbleGame(int state);
+
 // Before the engine starts: the game of the menu entry the core was loaded
 // from (MISTER_HYBRID_SET, Xash3D_<id>), or the one installed next to the
-// binary, or the one the player picks from the list of those (MH_PickGame()).
-// Then "Loading <title>..." until the first frame. Sets XASH3D_GAME. Returns 0
+// binary, or the one the player picks from the list of those (MH_PickGame(),
+// which shows the game's logo until the first frame). Sets XASH3D_GAME. Returns 0
 // to quit: the player left the list, or the game is not there (said on the
 // screen until the player left the core)
 int MiSTer_SelectGame(void);

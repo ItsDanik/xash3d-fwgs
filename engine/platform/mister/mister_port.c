@@ -122,6 +122,220 @@ int MiSTer_Cheats(int player)
     return (int)MH_OSD_GAME_BITS(MH_OSDStatus(), 27, 3) | triggers;
 }
 
+// "O[32:31],Rumble,On,Strong,Off;" (core/Xash3D.sv): the strengths below at
+// On, twice them at Strong (bit 30 was Give All Weapons up to host version 12,
+// and is left alone). What rumbles: the player's shots, the gauss charging
+// and the egon's beam, damage taken, explosions nearby, and the screen shakes
+// of the maps and monsters, all of it only while a level runs. A shot or a hit
+// is a pulse of its own length; the strongest of what is going on is given to
+// the motors every frame (RumbleUpdate()). MISTER_HYBRID_RUMBLELOG=1 prints
+// every change of what they are given.
+#define RUMBLE_PULSES 4
+
+struct rumble {
+    int strong, weak;
+    long long until; // milliseconds, RumbleNow()
+};
+static struct rumble Pulses[RUMBLE_PULSES], Shake;
+static int RumbleState, Egon, GaussSpin;
+static int RumbleLog = -1;
+
+// MISTER_HYBRID_RUMBLELOG=1: what made it rumble
+static void RumbleWhy(const char *what, float value)
+{
+    if (RumbleLog < 0)
+        RumbleLog = getenv("MISTER_HYBRID_RUMBLELOG") != NULL;
+    if (RumbleLog)
+        fprintf(stderr, "mister: rumble from %s %g\n", what, value);
+}
+
+// The player's weapons, by their events (events/<name>.sc of the client
+// library); the gauss and the egon are MiSTer_RumbleEvent()'s own
+static const struct {
+    const char *name;
+    unsigned char strong, weak, ms;
+} WeaponRumble[] = {
+    // Half-Life, and Blue Shift, which has the same
+    { "crowbar", 0, 60, 50 },
+    { "glock1", 30, 90, 60 },
+    { "glock2", 30, 90, 60 },
+    { "python", 160, 110, 120 },
+    { "mp5", 50, 100, 60 },
+    { "mp52", 140, 70, 140 }, // the grenade
+    { "shotgun1", 140, 110, 120 },
+    { "shotgun2", 190, 140, 170 },
+    { "crossbow1", 70, 80, 80 },
+    { "crossbow2", 70, 80, 80 },
+    { "rpg", 170, 90, 200 },
+    { "firehornet", 20, 70, 50 },
+    { "snarkfire", 0, 40, 40 },
+    // Opposing Force
+    { "knife", 0, 50, 40 },
+    { "pipewrench", 0, 70, 60 },
+    { "eagle", 120, 100, 100 },
+    { "m249", 80, 110, 60 },
+    { "sniper", 180, 120, 150 },
+    { "shock", 30, 90, 60 },
+    { "spore", 100, 70, 110 },
+    { "displacer", 190, 150, 250 },
+    { "penguinfire", 0, 40, 40 },
+};
+#define RUMBLE_EGON_STRONG 60
+#define RUMBLE_EGON_WEAK 110
+
+static long long RumbleNow(void)
+{
+    struct timespec t;
+
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+static int Clamp255(float v)
+{
+    return v < 0 ? 0 : v > 255 ? 255 : (int)v;
+}
+
+// In the place of the pulse that ends first
+static void RumblePulse(int strong, int weak, int ms)
+{
+    struct rumble *p = &Pulses[0];
+    int i;
+
+    for (i = 1; i < RUMBLE_PULSES; i++) {
+        if (Pulses[i].until < p->until)
+            p = &Pulses[i];
+    }
+    p->strong = strong;
+    p->weak = weak;
+    p->until = RumbleNow() + ms;
+}
+
+void MiSTer_RumbleEvent(const char *name, float fparam1, int iparam1, int bparam2)
+{
+    size_t len;
+    unsigned i;
+
+    if (strncmp(name, "events/", 7))
+        return;
+    RumbleWhy(name, fparam1);
+    name += 7;
+    len = strlen(name);
+    if (len < 3 || strcmp(name + len - 3, ".sc"))
+        return;
+    len -= 3;
+    if (len == 5 && !strncmp(name, "gauss", 5)) {
+        // fparam1 the damage: 20 a primary shot, up to 200 fully charged;
+        // bparam2: only the charge's end, no shot
+        float f = fparam1 >= 200 ? 1 : fparam1 / 200;
+
+        GaussSpin = 0;
+        if (!bparam2 && fparam1 > 0)
+            RumblePulse(Clamp255(60 + 140 * f), Clamp255(100 + 60 * f), 80 + (int)(220 * f));
+        return;
+    }
+    if (len == 9 && !strncmp(name, "gaussspin", 9)) {
+        // iparam1 the pitch of its sound, 110 to 250 as it charges, a step a
+        // frame or two: in steps of 8, the controller is not told every one
+        GaussSpin = bparam2 ? 0 : Clamp255(30 + (iparam1 - 110) * 90 / 140) & ~7;
+        return;
+    }
+    if (len == 9 && !strncmp(name, "egon_fire", 9)) {
+        Egon = 1;
+        return;
+    }
+    if (len == 9 && !strncmp(name, "egon_stop", 9)) {
+        Egon = 0;
+        return;
+    }
+    for (i = 0; i < sizeof(WeaponRumble) / sizeof(WeaponRumble[0]); i++) {
+        if (strlen(WeaponRumble[i].name) == len && !strncmp(name, WeaponRumble[i].name, len)) {
+            RumblePulse(WeaponRumble[i].strong, WeaponRumble[i].weak, WeaponRumble[i].ms);
+            return;
+        }
+    }
+}
+
+void MiSTer_RumbleDamage(int armor, int health)
+{
+    int total = armor + health;
+    float f;
+
+    if (total <= 0)
+        return;
+    RumbleWhy("damage", total);
+    f = total >= 40 ? 1 : total / 40.0f;
+    RumblePulse(Clamp255(70 + 110 * f), Clamp255(60 + 60 * f), 120 + (int)(200 * f));
+}
+
+void MiSTer_RumbleExplosion(float distance)
+{
+    float f = 1 - distance / 1200;
+
+    if (f <= 0)
+        return;
+    RumbleWhy("an explosion at", distance);
+    f *= f;
+    RumblePulse(Clamp255(190 * f), Clamp255(120 * f), 150 + (int)(200 * f));
+}
+
+void MiSTer_RumbleShake(int strong, int weak, int ms)
+{
+    Shake.strong = strong;
+    Shake.weak = weak;
+    Shake.until = RumbleNow() + ms;
+}
+
+void MiSTer_RumbleGame(int state)
+{
+    RumbleState = state;
+    if (state == MISTER_RUMBLE_NONE) {
+        memset(Pulses, 0, sizeof(Pulses));
+        memset(&Shake, 0, sizeof(Shake));
+        Egon = GaussSpin = 0;
+    }
+}
+
+static void RumbleUpdate(void)
+{
+    static int last_strong, last_weak;
+    long long now = RumbleNow();
+    int level = MH_OSD_GAME_BITS(MH_OSDStatus(), 31, 2); // 0 On, 1 Strong, 2 Off
+    int strong = 0, weak = 0;
+    int i;
+
+    if (RumbleLog < 0)
+        RumbleLog = getenv("MISTER_HYBRID_RUMBLELOG") != NULL;
+    if (RumbleState == MISTER_RUMBLE_RUNNING && level < 2) {
+        for (i = 0; i < RUMBLE_PULSES; i++) {
+            if (Pulses[i].until > now) {
+                strong = Pulses[i].strong > strong ? Pulses[i].strong : strong;
+                weak = Pulses[i].weak > weak ? Pulses[i].weak : weak;
+            }
+        }
+        if (Shake.until > now) {
+            strong = Shake.strong > strong ? Shake.strong : strong;
+            weak = Shake.weak > weak ? Shake.weak : weak;
+        }
+        if (Egon) {
+            strong = RUMBLE_EGON_STRONG > strong ? RUMBLE_EGON_STRONG : strong;
+            weak = RUMBLE_EGON_WEAK > weak ? RUMBLE_EGON_WEAK : weak;
+        }
+        weak = GaussSpin > weak ? GaussSpin : weak;
+        strong = Clamp255(strong * (level + 1));
+        weak = Clamp255(weak * (level + 1));
+    }
+    // every frame while it rumbles: the library keeps the motors going only
+    // while it is called, and passes on at most 40 changes a second
+    if (strong || weak || strong != last_strong || weak != last_weak) {
+        MH_Rumble(strong, weak);
+        if (RumbleLog && (strong != last_strong || weak != last_weak))
+            fprintf(stderr, "mister: rumble %d %d\n", strong, weak);
+    }
+    last_strong = strong;
+    last_weak = weak;
+}
+
 static uint32_t LastField;
 static int FieldValid = 0;
 
@@ -292,6 +506,7 @@ unsigned MiSTer_WaitFrame(void)
     }
     MiSTer_Mark(MISTER_T_WAIT);
     PollTriggers();
+    RumbleUpdate();
     HudLines();
     lock = Lock30();
     if (!MH_Interlaced()) {
@@ -375,17 +590,16 @@ static const char *const GameDirs[] = { "valve", "gearbox", "bshift" };
 int MiSTer_SelectGame(void)
 {
     const char *base = getenv("XASH3D_BASEDIR");
-    char text[MH_MSG_COLS + 1];
     int pick;
 
     // a game given on the command line, or no core: as on a PC
     if (getenv("XASH3D_GAME") || !MH_Open())
         return 1;
+    // the data check's lines, then the game's logo with "Loading <title>..."
+    // until the first frame (MH_GameLogo(), host version 17)
     pick = MH_PickGame(Games, NUM_GAMES, base, NO_GAME, &PickedFromList);
     if (pick < 0)
         return 0;
-    snprintf(text, sizeof(text), "Loading %s...", Games[pick].name);
-    MH_UI_Message(TITLE, text, 0);
     setenv("XASH3D_GAME", GameDirs[pick], 1);
     return 1;
 }

@@ -15,6 +15,9 @@ GNU General Public License for more details.
 
 #include "common.h"
 #include "client.h"
+#ifdef MISTER_HYBRID
+#include "platform/mister/mister_port.h"
+#endif
 #include "r_efx.h"
 #include "entity_types.h"
 #include "triangleapi.h"
@@ -1912,6 +1915,10 @@ void CL_ParseTempEntity( sizebuf_t *msg, connprotocol_t proto )
 		frameRate = MSG_ReadByte( pbuf );
 		flags = MSG_ReadByte( pbuf );
 		R_Explosion( pos, modelIndex, scale, frameRate, flags );
+#ifdef MISTER_HYBRID
+		// it rumbles, the more the nearer it is (mister_port.c)
+		MiSTer_RumbleExplosion( VectorDistance( pos, refState.vieworg ));
+#endif
 		break;
 	case TE_TAREXPLOSION:
 		pos[0] = MSG_ReadCoord( pbuf );

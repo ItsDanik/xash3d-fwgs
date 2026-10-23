@@ -15,6 +15,9 @@ GNU General Public License for more details.
 
 #include "common.h"
 #include "client.h"
+#ifdef MISTER_HYBRID
+#include "platform/mister/mister_port.h"
+#endif
 #include "event_flags.h"
 #include "net_encode.h"
 #include "con_nprint.h"
@@ -227,6 +230,11 @@ static qboolean CL_FireEvent( event_info_t *ei, int slot )
 
 			if( ev->func )
 			{
+#ifdef MISTER_HYBRID
+				// the player's shots rumble (mister_port.c)
+				if( ei->args.entindex == cl.playernum + 1 )
+					MiSTer_RumbleEvent( name, ei->args.fparam1, ei->args.iparam1, ei->args.bparam2 );
+#endif
 				CL_DescribeEvent( ei, slot );
 				ev->func( &ei->args );
 				return true;

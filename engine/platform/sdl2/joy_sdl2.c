@@ -18,6 +18,9 @@ GNU General Public License for more details.
 #include "keydefs.h"
 #include "input.h"
 #include "client.h"
+#ifdef MISTER_HYBRID
+#include "platform/mister/mister_port.h"
+#endif
 #include "platform_sdl2.h"
 
 static const int g_button_mapping[] =
@@ -465,7 +468,15 @@ void Platform_CalibrateGamepadGyro( void )
 
 void Platform_Vibrate2( float time, int val1, int val2, uint flags )
 {
-#if SDL_VERSION_ATLEAST( 2, 0, 9 )
+#ifdef MISTER_HYBRID
+	// the core's controllers, at the strength of the OSD's Rumble with the
+	// rest of what rumbles (mister_port.c)
+	if( val1 < 0 )
+		val1 = COM_RandomLong( 0x7FFF, 0xFFFF );
+	if( val2 < 0 )
+		val2 = COM_RandomLong( 0x7FFF, 0xFFFF );
+	MiSTer_RumbleShake( val1 >> 8, val2 >> 8, (int)ceil( time ));
+#elif SDL_VERSION_ATLEAST( 2, 0, 9 )
 	SDL_GameController *gc = g_current_gamepad;
 
 	if( g_current_gamepad_id < 0 || !gc )

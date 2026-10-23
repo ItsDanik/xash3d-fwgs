@@ -3972,6 +3972,15 @@ void Host_ClientFrame( void )
 
 	// adjust client time
 	CL_AdjustClock ();
+
+#ifdef MISTER_HYBRID
+	// the controllers rumble only while the level runs (mister_port.c)
+	if( cls.state != ca_active || cl.background )
+		MiSTer_RumbleGame( MISTER_RUMBLE_NONE );
+	else if( cl.paused || cls.key_dest != key_game || Con_Visible( ))
+		MiSTer_RumbleGame( MISTER_RUMBLE_PAUSED );
+	else MiSTer_RumbleGame( MISTER_RUMBLE_RUNNING );
+#endif
 }
 
 //============================================================================

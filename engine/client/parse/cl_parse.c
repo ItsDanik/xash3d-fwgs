@@ -15,6 +15,9 @@ GNU General Public License for more details.
 
 #include "common.h"
 #include "client.h"
+#ifdef MISTER_HYBRID
+#include "platform/mister/mister_port.h"
+#endif
 #include "mod_local.h"
 #include "net_encode.h"
 #include "cl_tent.h"
@@ -2287,6 +2290,13 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 		Con_Reportf( "^3USERMSG %s SIZE %i SVC_NUM %i\n",
 			clgame.msg[i].name, iSize, clgame.msg[i].number );
 	}
+
+#ifdef MISTER_HYBRID
+	// the damage the player takes rumbles (mister_port.c): what the armour
+	// took and the health, the first two bytes in every game
+	if( iSize >= 2 && !Q_strcmp( clgame.msg[i].name, "Damage" ))
+		MiSTer_RumbleDamage( pbuf[0], pbuf[1] );
+#endif
 
 	if( clgame.msg[i].func )
 	{
