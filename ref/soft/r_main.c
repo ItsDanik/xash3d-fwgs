@@ -1241,6 +1241,30 @@ void GAME_EXPORT R_NewMap( void )
 	tr.draw_list->num_beam_entities = 0;
 	tr.draw_list->num_edge_entities = 0;
 
+	// Loading a save of the map that is running keeps the world's surfaces
+	// (Mod_LoadWorld), whose decal lists still point into the pool cleared
+	// below: a reused entry was then appended to the list of another surface,
+	// or to itself, and the decal drawing looped for ever (Xash3D_MiSTer
+	// issue #1). The GL renderer clears them in GL_BuildLightmaps. Their
+	// cached pictures have the old decals in them: drop them too.
+	for( int i = 1; i < gp_cl->nummodels; i++ )
+	{
+		model_t *m = CL_ModelHandle( i );
+
+		if( !m || m->type != mod_brush || m->name[0] == '*' )
+			continue; // the inline models' surfaces are the world's
+
+		for( int j = 0; j < m->numsurfaces; j++ )
+		{
+			msurface_t *surf = &m->surfaces[j];
+
+			surf->pdecals = NULL;
+			for( int mip = 0; mip < 4; mip++ )
+				CACHESPOT( surf )[mip] = NULL;
+		}
+	}
+	D_FlushCaches(); // with tr.map_unload it does not touch the old surfaces
+
 	R_ClearDecals(); // clear all level decals
 	R_StudioResetPlayerModels();
 
