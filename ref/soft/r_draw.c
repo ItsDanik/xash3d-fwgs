@@ -32,6 +32,84 @@ void R_GetTextureParms( int *w, int *h, int texnum )
 
 /*
 =============
+R_StretchRow
+
+One row of R_DrawStretchPicImplementation, a loop for each case
+=============
+*/
+static inline __attribute__(( always_inline )) void R_StretchRowCase( pixel_t *dest, const pixel_t *source, uint fstep, uint w,
+	int alpha1, qboolean transparent, qboolean white, pixel_t color, int mode )
+{
+	uint f = 0;
+
+	for( uint u = 0; u < w; u++ )
+	{
+		pixel_t src = source[f >> 16];
+		int     alpha = alpha1;
+		f += fstep;
+
+		if( transparent )
+		{
+			alpha &= src >> ( 16 - 3 );
+			src = src << 3;
+		}
+
+		if( alpha == 0 )
+			continue;
+
+		if( !white )
+			src = vid.modmap[( src & 0xff00 ) | ( color >> 8 )] << 8 | ( src & color & 0xff ) | (( src & 0xff ) >> 3 );
+
+		if( mode == kRenderTransAdd )
+		{
+			pixel_t screen = dest[u];
+			dest[u] = vid.addmap[( src & 0xff00 ) | ( screen >> 8 )] << 8 | ( screen & 0xff ) | (( src & 0xff ) >> 0 );
+		}
+		else if( mode == kRenderScreenFadeModulate )
+		{
+			pixel_t screen = dest[u];
+			dest[u] = BLEND_COLOR( screen, color );
+		}
+		else if( alpha < 7 )
+		{
+			pixel_t screen = dest[u];
+			dest[u] = BLEND_ALPHA( alpha, src, screen );
+		}
+		else
+			dest[u] = src;
+	}
+}
+
+#define STRETCH_MODES( transparent, white ) \
+	if( mode == kRenderTransAdd ) \
+		R_StretchRowCase( dest, source, fstep, w, alpha1, transparent, white, color, kRenderTransAdd ); \
+	else if( mode == kRenderScreenFadeModulate ) \
+		R_StretchRowCase( dest, source, fstep, w, alpha1, transparent, white, color, kRenderScreenFadeModulate ); \
+	else \
+		R_StretchRowCase( dest, source, fstep, w, alpha1, transparent, white, color, kRenderNormal )
+
+static void R_StretchRow( pixel_t *dest, const pixel_t *source, uint fstep, uint w, int alpha1, qboolean transparent, pixel_t color, int mode )
+{
+	if( transparent )
+	{
+		if( color == COLOR_WHITE )
+			STRETCH_MODES( true, true );
+		else
+			STRETCH_MODES( true, false );
+	}
+	else
+	{
+		if( color == COLOR_WHITE )
+			STRETCH_MODES( false, true );
+		else
+			STRETCH_MODES( false, false );
+	}
+}
+
+#undef STRETCH_MODES
+
+/*
+=============
 Draw_StretchPicImplementation
 =============
 */
@@ -85,53 +163,83 @@ static void R_DrawStretchPicImplementation( int x, int y, int w, int h, int s1, 
 		buffer = pic->pixels[0];
 
 
-#pragma omp parallel for schedule(static)
-	for( int v = 0; v < height; v++ )
+	// The rows (MiSTer, 2026-10-28): the menu's 640x480 is a stretched
+	// background (twelve pictures, 800x600 to 640x480) and text, about 380000
+	// pixels every frame, and the loop read vid.color, vid.rendermode and
+	// vid.alpha again for every pixel (a store to a pixel_t may change
+	// vid.color) and divided once per row (the Cortex-A9 has no divide
+	// instruction). Now the opaque rows are a copy from columns worked out
+	// once, every other case has a loop of its own (R_StretchRow), and the
+	// rows step without a division: the same pixels.
 	{
-		int     alpha1 = vid.alpha;
-		pixel_t *dest = vid.buffer + ( y + v ) * vid.rowbytes + x;
-		uint    sv = ( skip + v ) * ( t2 - t1 ) / h + t1;
-		pixel_t *source = buffer + sv * pic->width + s1;
+		const int    alpha1 = vid.alpha;
+		const pixel_t color = vid.color;
+		const int    mode = vid.rendermode;
+		const uint   fstep = (( s2 - s1 ) << 16 ) / w;
+		const int    dt = t2 - t1;
+		// sv = ( skip + v ) * dt / h + t1, stepped: sv_q the quotient, sv_r the remainder
+		uint         sv_q = (uint)( skip * dt ) / (uint)h, sv_r = (uint)( skip * dt ) % (uint)h;
+		const uint   dq = (uint)dt / (uint)h, dr = (uint)dt % (uint)h;
 
-		uint f = 0;
-		uint fstep = (( s2 - s1 ) << 16 ) / w;
+		// opaque: the picture's pixels as they are (the menu's background),
+		// each row from the same columns, their byte offsets worked out once
+		qboolean       opaque = !transparent && color == COLOR_WHITE && alpha1 >= 7
+			&& mode != kRenderTransAdd && mode != kRenderScreenFadeModulate;
+		static uint    *cols;
+		static uint    cols_size;
 
-		for( uint u = 0; u < w; u++ )
+		if( alpha1 == 0 )
+			return; // every pixel skipped
+
+		if( opaque && fstep != 1 << 16 )
 		{
-			pixel_t src = source[f >> 16];
-			int     alpha = alpha1;
-			f += fstep;
+			uint f = 0;
 
-			if( transparent )
+			if( cols_size < (uint)w )
 			{
-				alpha &= src >> ( 16 - 3 );
-				src = src << 3;
-			}
+				uint *more = realloc( cols, w * sizeof( *cols ));
 
-			if( alpha == 0 )
-				continue;
-
-			if( vid.color != COLOR_WHITE )
-				src = vid.modmap[( src & 0xff00 ) | ( vid.color >> 8 )] << 8 | ( src & vid.color & 0xff ) | (( src & 0xff ) >> 3 );
-
-			if( vid.rendermode == kRenderTransAdd )
-			{
-				pixel_t screen = dest[u];
-				dest[u] = vid.addmap[( src & 0xff00 ) | ( screen >> 8 )] << 8 | ( screen & 0xff ) | (( src & 0xff ) >> 0 );
+				if( more )
+				{
+					cols = more;
+					cols_size = w;
+				}
 			}
-			else if( vid.rendermode == kRenderScreenFadeModulate )
-			{
-				pixel_t screen = dest[u];
-				dest[u] = BLEND_COLOR( screen, vid.color );
-			}
-			else if( alpha < 7 ) // && (vid.rendermode == kRenderTransAlpha || vid.rendermode == kRenderTransTexture ) )
-			{
-				pixel_t screen = dest[u];                    //  | 0xff & screen & src ;
-				dest[u] = BLEND_ALPHA( alpha, src, screen ); // vid.alphamap[( alpha << 16)|(src & 0xff00)|(screen>>8)] << 8 | (screen & 0xff) >> 3 | ((src & 0xff) >> 3);
-			}
+			if( cols_size < (uint)w )
+				opaque = false; // R_StretchRow's loop does the same
 			else
-				dest[u] = src;
+			{
+				for( uint u = 0; u < w; u++ )
+				{
+					cols[u] = ( f >> 16 ) * sizeof( pixel_t );
+					f += fstep;
+				}
+			}
+		}
 
+		for( uint v = 0; v < height; v++ )
+		{
+			pixel_t       *dest = vid.buffer + ( y + v ) * vid.rowbytes + x;
+			const pixel_t *source = buffer + ( sv_q + t1 ) * pic->width + s1;
+
+			if( !opaque )
+				R_StretchRow( dest, source, fstep, w, alpha1, transparent, color, mode );
+			else if( fstep == 1 << 16 )
+				memcpy( dest, source, w * sizeof( pixel_t ));
+			else
+			{
+				const byte *row = (const byte *)source;
+
+				for( uint u = 0; u < w; u++ )
+					dest[u] = *(const pixel_t *)( row + cols[u] );
+			}
+			sv_q += dq;
+			sv_r += dr;
+			if( sv_r >= (uint)h )
+			{
+				sv_q++;
+				sv_r -= h;
+			}
 		}
 	}
 }
@@ -185,27 +293,47 @@ void Draw_Fill( int x, int y, int w, int h )
 		y = 0;
 	}
 
-#pragma omp parallel for schedule(static)
-	for( int v = 0; v < height; v++ )
+	// the same for every pixel, decided once (MiSTer, 2026-10-28: the loop
+	// read vid.rendermode again for each, as in R_DrawStretchPicImplementation)
+	const int mode = vid.rendermode;
+
+	if( alpha == 0 )
+		return;
+
+	for( uint v = 0; v < height; v++ )
 	{
 		pixel_t *dest = vid.buffer + ( y + v ) * vid.rowbytes + x;
 
-		for( uint u = 0; u < w; u++ )
+		if( mode == kRenderTransAdd )
 		{
-			if( alpha == 0 )
-				continue;
-
-			if( vid.rendermode == kRenderTransAdd )
+			for( uint u = 0; u < w; u++ )
 			{
 				pixel_t screen = dest[u];
 				dest[u] = vid.addmap[( src & 0xff00 ) | ( screen >> 8 )] << 8 | ( screen & 0xff ) | (( src & 0xff ) >> 0 );
 			}
-			else if( alpha < 7 ) // && (vid.rendermode == kRenderTransAlpha || vid.rendermode == kRenderTransTexture ) )
+		}
+		else if( alpha > 3 && alpha < 7 )
+		{
+			// BLEND_ALPHA( alpha, src, screen ), its part of the table for src
+			const pixel_t *map = vid.alphamap + ((( 7 - 1 - alpha ) << 18 ) | ( src >> 6 ));
+
+			for( uint u = 0; u < w; u++ )
+				dest[u] = map[( dest[u] & 0xff00 ) << 2] | ( src & 0x3f );
+		}
+		else if( alpha < 7 ) // && (vid.rendermode == kRenderTransAlpha || vid.rendermode == kRenderTransTexture ) )
+		{
+			// the dialogs' darkened screen (alpha 2): BLEND_ALPHA( alpha, src, screen )
+			const pixel_t *map = vid.alphamap + ((( alpha - 1 ) << 18 ) | (( src & 0xff00 ) << 2 ));
+
+			for( uint u = 0; u < w; u++ )
 			{
-				pixel_t screen = dest[u];                    //  | 0xff & screen & src ;
-				dest[u] = BLEND_ALPHA( alpha, src, screen ); // vid.alphamap[( alpha << 16)|(src & 0xff00)|(screen>>8)] << 8 | (screen & 0xff) >> 3 | ((src & 0xff) >> 3);
+				pixel_t screen = dest[u];
+				dest[u] = map[screen >> 6] | ( screen & 0x3f );
 			}
-			else
+		}
+		else
+		{
+			for( uint u = 0; u < w; u++ )
 				dest[u] = src;
 		}
 	}

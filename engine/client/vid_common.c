@@ -127,6 +127,9 @@ static void VID_MiSTerMode( void )
 	int width = menu ? 640 : 320;
 	int height = menu ? 480 : MiSTer_GameHeight();
 
+	// the menu at a frame per field, also at 480i (host version 18)
+	MiSTer_MenuScreen( menu );
+
 	if( !host.hWnd || ( refState.width == width && refState.height == height ))
 		return;
 

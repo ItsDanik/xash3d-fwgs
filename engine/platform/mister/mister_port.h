@@ -46,6 +46,9 @@ unsigned MiSTer_WaitFrame(void);
 int MiSTer_Paced(void);
 // The next call starts counting anew, after the game stood still (loading)
 void MiSTer_ResetFrames(void);
+// 1 while the menu's 640x480 is shown (VID_MiSTerMode()): a frame at every
+// field, interlaced too (MH_SetFieldRate(), host version 18); 0 in the game
+void MiSTer_MenuScreen(int on);
 
 // Problems the player can fix (missing data): shown on the screen until a
 // button is pressed, in plain words that say which files go where

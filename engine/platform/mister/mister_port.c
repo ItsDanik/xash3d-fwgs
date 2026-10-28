@@ -492,6 +492,20 @@ void MiSTer_ResetFrames(void)
     FieldValid = 0;
 }
 
+// The menu's 640x480 (VID_MiSTerMode() in client/vid_common.c) takes a frame
+// at every field while it is interlaced (host version 18, Danik 2026-10-28:
+// every core's menus at 480i), 59.6 a second as at 31kHz; the game's own
+// modes are never interlaced. The menu's animations and repeats go by the
+// engine's time, which is the fields that passed (Host_Main()).
+static int MenuScreen;
+
+void MiSTer_MenuScreen(int on)
+{
+    MenuScreen = on != 0;
+    if (MH_IsOpen())
+        MH_SetFieldRate(MenuScreen);
+}
+
 unsigned MiSTer_WaitFrame(void)
 {
     uint32_t field;
@@ -508,8 +522,11 @@ unsigned MiSTer_WaitFrame(void)
     PollTriggers();
     RumbleUpdate();
     HudLines();
-    lock = Lock30();
-    if (!MH_Interlaced()) {
+    // Lock to 30 FPS is the game's: the menu at a frame per field
+    lock = Lock30() && !MenuScreen;
+    // interlaced a frame takes two fields, and the core shows it at once; at
+    // field rate (the menu, MiSTer_MenuScreen()) one field, as progressive
+    if (!MH_Interlaced() || MH_FieldRate()) {
         // A frame drawn from one vblank to the next was shown at the next
         // only if it was ready by then: about 14ms of a field's 16.8 here,
         // and every tenth was not, so the frame before stayed a field longer
